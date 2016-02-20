@@ -1,0 +1,18 @@
+{
+  "name": "swarm-discovery",
+  "version": "0.0.1",
+  "description": "DNS based service discovery for swarm milti-host networks ",
+  "main": "server.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "Evgeny Kruglov <ekruglov@gmail.com>",
+  "license": "ISC",
+  "dependencies": {
+    "commander": "^2.9.0",
+    "docker-events": "0.0.2",
+    "dockerode": "^2.2.9",
+    "lodash": "^4.5.0",
+    "native-dns": "^0.7.0"
+  }
+}
