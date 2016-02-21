@@ -1,16 +1,16 @@
 "use strict";
 const _=require('lodash');
 const commander=require('commander');
+
 // :TODO add settings based on env vars and arguments
 commander
   .version('0.0.1')
   .usage('[OPTIONS] [ENDPOINT]:[PORT]')
   .option('--debug','Logging more information')
-  .option('--dns-log','Logging dns queries information')
+  .option('--dns-logs','Logging dns queries information')
   .option('--dns-resolver <host>','Forward recursive questions to this resolver. Default 8.8.8.8')
   .option('--dns-timeout <num>','Resolve timeout in ms for recursive queries. Default 500ms')
   .option('--network <name>','Multi-host default network name')
-  //.option('--bind <bind>','Bind DNS server for this host:port')
   .parse(process.argv);
 
 let docker;
@@ -35,9 +35,7 @@ const nodes={};
 
 emitter.on("connect", function() {
   debug("Connected to docker api.");
-  //let tmp=commander.bind?commander.bind.split(':'):[];
-  //server.serve(tmp[1]||53,tmp[0]||'0.0.0.0');
-  server.serve();
+  server.serve(53,'0.0.0.0');
 
   docker.listContainers({},function(err,data){
     if (err){
@@ -99,7 +97,7 @@ server.on('request', function (req, res) {
     }
     if (!vals.length){
       vals=_.find(nodes,{name:name[0]});
-      if (vals.ip){
+      if (vals && vals.ip){
         _.forEach(vals.binds,v=>{
           v=v.split(':');
           res.additional.push(dns.SRV({
@@ -124,13 +122,6 @@ server.on('request', function (req, res) {
     ttl: 0,
   })));
   return res.send();
-
-  //res.additional.push(dns.A({
-  //  name: 'hostA.example.org',
-  //  address: '127.0.0.3',
-  //  ttl: 600,
-  //}));
-  res.send();
 });
 
 server.on('error', dnsErrorHandler);
@@ -188,7 +179,6 @@ function dnsProxy(req,res){
 
   proxy.on('timeout', function () {
     console.warn(`Timeout in making request for ${req.question[0].name} after ${Date.now()-start}ms`);
-    //res.send();
   });
   proxy.on('message', function (err, answer) {
     res.answer.push(...answer.answer);
@@ -197,7 +187,7 @@ function dnsProxy(req,res){
   });
   proxy.on('end', function () {
     res.send();
-    commander.dnsLog && console.log(
+    commander.dnsLogs && console.log(
       `DNS type ${dns.consts.QTYPE_TO_NAME[req.question[0].type]} for ${req.question[0].name} takes ${Date.now()-start}ms`
     );
   });
@@ -212,3 +202,6 @@ function dnsErrorHandler(err) {
 function debug(msg){
   commander.debug && console.warn(msg);
 }
+
+process.on('SIGTERM', process.exit);
+process.on('SIGINT', process.exit);
