@@ -6,8 +6,11 @@ commander
   .version('0.0.1')
   .usage('[OPTIONS] [ENDPOINT]:[PORT]')
   .option('--debug','Logging more information')
+  .option('--dns-log','Logging dns queries information')
+  .option('--dns-resolver <host>','Forward recursive questions to this resolver. Default 8.8.8.8')
+  .option('--dns-timeout <num>','Resolve timeout in ms for recursive queries. Default 500ms')
   .option('--network <name>','Multi-host default network name')
-  .option('--bind <bind>','Bind DNS server for this host:port')
+  //.option('--bind <bind>','Bind DNS server for this host:port')
   .parse(process.argv);
 
 let docker;
@@ -32,15 +35,16 @@ const nodes={};
 
 emitter.on("connect", function() {
   debug("Connected to docker api.");
-  let tmp=commander.bind?commander.bind.split(':'):[];
-  server.serve(tmp[1]||53,tmp[0]||'0.0.0.0');
+  //let tmp=commander.bind?commander.bind.split(':'):[];
+  //server.serve(tmp[1]||53,tmp[0]||'0.0.0.0');
+  server.serve();
 
   docker.listContainers({},function(err,data){
     if (err){
       console.error(err.message);
       return;
     }
-    data.map(i=>addOne(i.Id,(new Date-1000)*1e6));
+    data.map(i=>addOne(i.Id,(Date.now()-1000)*1e6));
   });
 });
 emitter.on("disconnect", function() {
@@ -71,29 +75,61 @@ emitter.on("unpause", function(message) {
 
 emitter.start();
 
-console.log()
-
 server.on('request', function (req, res) {
   if (dns.consts.QTYPE_TO_NAME[req.question[0].type]!='A'){
     return dnsProxy(req,res);
   }
 
-  console.log(req.question[0])
-  res.answer.push(dns.A({
+  let name=req.question[0].name.toLowerCase().split('.');
+  if (name.length==1 || name.length>3){
+    return dnsProxy(req,res);
+  }
+  if (name.slice(-1)[0]!='discovery'){
+    return dnsProxy(req,res);
+  }
+
+  let vals=[]
+  if (name.length==3){
+    vals=_.reduce(nodes,(o,v)=>~_.indexOf(v.netNames[name[1]],name[0]) && o.push(v.ips[name[1]]) && false || o,[]);
+  } else {
+    if (commander.network){
+      vals=_.reduce(nodes,(o,v)=>
+        ~_.indexOf(v.netNames[commander.network],name[0]) && o.push(v.ips[commander.network]) && false || o
+        ,[]);
+    }
+    if (!vals.length){
+      vals=_.find(nodes,{name:name[0]});
+      if (vals.ip){
+        _.forEach(vals.binds,v=>{
+          v=v.split(':');
+          res.additional.push(dns.SRV({
+            priority:0,
+            weight:0,
+            port: v[1],
+            target:v[0],
+            name: req.question[0].name,
+            ttl:0
+          }))
+        });
+        vals=[vals.ip];
+      } else {
+        vals=[];
+      }
+    }
+  }
+
+  _.shuffle(vals).forEach(v=>res.answer.push(dns.A({
     name: req.question[0].name,
-    address: '192.168.122.1',
-    ttl: 600,
-  }));
-  res.answer.push(dns.A({
-    name: req.question[0].name,
-    address: '127.0.0.2',
-    ttl: 600,
-  }));
-  res.additional.push(dns.A({
-    name: 'hostA.example.org',
-    address: '127.0.0.3',
-    ttl: 600,
-  }));
+    address: v,
+    ttl: 0,
+  })));
+  return res.send();
+
+  //res.additional.push(dns.A({
+  //  name: 'hostA.example.org',
+  //  address: '127.0.0.3',
+  //  ttl: 600,
+  //}));
   res.send();
 });
 
@@ -118,7 +154,7 @@ function addOne(id,nt){
 
     let ip=null;
     nodes[id]={
-      names:[id,data.Name.slice(1),data.Config.Hostname].map(i=>i.toLowerCase()),
+      name:data.Name.slice(1).toLowerCase(),
       netNames:_.mapValues(data.NetworkSettings.Networks,'Aliases'),
       binds: _(data.NetworkSettings.Ports).map(v=>v&&v.map(v1=>(ip=v1.HostIp)+':'+v1.HostPort)).flatten().compact().value(),
       ips:_.mapValues(data.NetworkSettings.Networks,'IPAddress'),
@@ -143,15 +179,16 @@ function removeOne(id,nt){
 }
 
 function dnsProxy(req,res){
+  let start=Date.now();
   let proxy=dns.Request({
     question: req.question[0],
-    server: { address: '8.8.8.8', port: 53, type: 'udp' },
-    timeout: 500,
+    server: { address: commander.dnsReslover || '8.8.8.8', port: 53, type: 'udp' },
+    timeout: commander.dnsTimeout || 500,
   });
 
   proxy.on('timeout', function () {
-    console.warn(`Timeout in making request for ${req.question[0].name}`);
-    res.cancel();
+    console.warn(`Timeout in making request for ${req.question[0].name} after ${Date.now()-start}ms`);
+    //res.send();
   });
   proxy.on('message', function (err, answer) {
     res.answer.push(...answer.answer);
@@ -160,6 +197,9 @@ function dnsProxy(req,res){
   });
   proxy.on('end', function () {
     res.send();
+    commander.dnsLog && console.log(
+      `DNS type ${dns.consts.QTYPE_TO_NAME[req.question[0].type]} for ${req.question[0].name} takes ${Date.now()-start}ms`
+    );
   });
   proxy.send();
 }
