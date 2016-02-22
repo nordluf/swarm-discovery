@@ -10,6 +10,7 @@ commander
   .option('--dns-logs','Logging dns queries information')
   .option('--dns-resolver <host>','Forward recursive questions to this resolver. Default 8.8.8.8')
   .option('--dns-timeout <num>','Resolve timeout in ms for recursive queries. Default 500ms')
+  .option('--dns-bind <ip>','Bind DNS server for this address')
   .option('--network <name>','Multi-host default network name')
   .parse(process.argv);
 
@@ -35,14 +36,14 @@ const nodes={};
 
 emitter.on("connect", function() {
   debug("Connected to docker api.");
-  server.serve(53,'0.0.0.0');
+  server.serve(53,commander.dnsBind || '0.0.0.0');
 
   docker.listContainers({},function(err,data){
     if (err){
       console.error(err.message);
       return;
     }
-    data.map(i=>addOne(i.Id,(Date.now()-1000)*1e6));
+    data.map(i=>addOne(i.Id,(Date.now()-1e3)*1e6));
   });
 });
 emitter.on("disconnect", function() {
@@ -74,7 +75,7 @@ emitter.on("unpause", function(message) {
 emitter.start();
 
 server.on('request', function (req, res) {
-  if (dns.consts.QTYPE_TO_NAME[req.question[0].type]!='A'){
+  if (!~_.indexOf(['A','AAAA'],dns.consts.QTYPE_TO_NAME[req.question[0].type])){
     return dnsProxy(req,res);
   }
 
