@@ -1,5 +1,5 @@
 FROM mhart/alpine-node:latest
-MAINTAINER Kruglov Evgeny <evgeny.kruglov@kairion.de>
+MAINTAINER Kruglov Evgeny <ekruglov@gmail.com>
 EXPOSE 53
 
 WORKDIR /srv/www/app

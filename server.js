@@ -153,7 +153,7 @@ function addOne(id,nt){
       added: nt
     };
     nodes[id].ip=ip;
-    console.log(`Container ${id} added`);
+    console.log(`Container ${nodes[id].name} added`);
   });
 }
 
@@ -166,8 +166,9 @@ function removeOne(id,nt){
     console.error(`Some action with ${id} already happened.`);
     return;
   }
+  const tmp=nodes[id].name;
   delete nodes[id];
-  console.log(`Container ${id} removed`);
+  console.log(`Container ${tmp} removed`);
 }
 
 function dnsProxy(req,res){
