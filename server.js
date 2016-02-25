@@ -75,7 +75,8 @@ emitter.on("unpause", function(message) {
 emitter.start();
 
 server.on('request', function (req, res) {
-  if (!~_.indexOf(['A','AAAA'],dns.consts.QTYPE_TO_NAME[req.question[0].type])){
+  const reqType=dns.consts.QTYPE_TO_NAME[req.question[0].type];
+  if (!~_.indexOf(['A','AAAA'],reqType)){
     return dnsProxy(req,res);
   }
 
@@ -117,7 +118,7 @@ server.on('request', function (req, res) {
     }
   }
 
-  _.shuffle(vals).forEach(v=>res.answer.push(dns.A({
+  _.shuffle(vals).forEach(v=>res.answer.push(dns[reqType]({
     name: req.question[0].name,
     address: v,
     ttl: 0,
@@ -186,6 +187,8 @@ function dnsProxy(req,res){
     res.answer.push(...answer.answer);
     res.authority.push(...answer.authority);
     res.additional.push(...answer.additional);
+    res.header=answer.header;
+    res.header.id=req.header.id;
   });
   proxy.on('end', function () {
     res.send();
