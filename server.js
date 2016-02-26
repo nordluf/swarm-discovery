@@ -118,7 +118,7 @@ server.on('request', function (req, res) {
     }
   }
 
-  _.shuffle(vals).forEach(v=>res.answer.push(dns[reqType]({
+  _.shuffle(vals).forEach(v=>res.answer.push(dns['A']({
     name: req.question[0].name,
     address: v,
     ttl: 0,
