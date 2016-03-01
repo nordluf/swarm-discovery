@@ -246,7 +246,9 @@ function debug(msg){
 
 setTimeout(function callMe(){
   const start=Date.now();
-  _.forEach(relcache,(i,k)=>{
+  let i=0;
+  for (let k in relcache){
+    i++;
     if (k<start/6e4-1^0){
       setImmediate(function(){
         const start=Date.now();
@@ -264,11 +266,11 @@ setTimeout(function callMe(){
         }
       });
     }
-  });
+  }
 
   setTimeout(callMe,6e4);
-  if (Date.now()-start>10){
-    console.warn(`Garbage collector takes ${Date.now()-start}ms!`);
+  if (Date.now()-start>50){
+    console.warn(`Garbage collector takes ${Date.now()-start}ms for ${i} keys!`);
   }
 },6e4);
 
