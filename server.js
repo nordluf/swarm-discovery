@@ -8,8 +8,9 @@ commander
   .usage('[OPTIONS] [ENDPOINT]:[PORT]')
   .option('--debug','Logging more information')
   .option('--dns-logs','Logging dns queries information')
+  .option('--dns-cached-logs','Logging cached dns queries information')
   .option('--dns-resolver <host>','Forward recursive questions to this resolver. Default 8.8.8.8')
-  .option('--dns-timeout <num>','Resolve timeout in ms for recursive queries. Default 500ms')
+  .option('--dns-timeout <num>','Resolve timeout in ms for recursive queries. Default 2500ms')
   .option('--dns-bind <ip>','Bind DNS server for this address')
   .option('--network <name>','Multi-host default network name')
   .parse(process.argv);
@@ -29,8 +30,8 @@ if (commander.args[0]) {
 }
 
 const emitter = new (require('docker-events'))({docker});
-const dns=require('native-dns');
-const server = dns.createServer();
+const ndns=require('native-dns');
+const server = ndns.createServer();
 
 const nodes={};
 
@@ -75,8 +76,8 @@ emitter.on("unpause", function(message) {
 emitter.start();
 
 server.on('request', function (req, res) {
-  const reqType=dns.consts.QTYPE_TO_NAME[req.question[0].type];
-  if (!~_.indexOf(['A','AAAA'],reqType)){
+  const reqType=ndns.consts.QTYPE_TO_NAME[req.question[0].type];
+  if (reqType!='A' && reqType!='AAAA'){
     return dnsProxy(req,res);
   }
 
@@ -88,7 +89,7 @@ server.on('request', function (req, res) {
     return dnsProxy(req,res);
   }
 
-  let vals=[]
+  let vals=[];
   if (name.length==3){
     vals=_.reduce(nodes,(o,v)=>~_.indexOf(v.netNames[name[1]],name[0]) && o.push(v.ips[name[1]]) && false || o,[]);
   } else {
@@ -102,7 +103,7 @@ server.on('request', function (req, res) {
       if (vals && vals.ip){
         _.forEach(vals.binds,v=>{
           v=v.split(':');
-          res.additional.push(dns.SRV({
+          res.additional.push(ndns.SRV({
             priority:0,
             weight:0,
             port: v[1],
@@ -118,10 +119,10 @@ server.on('request', function (req, res) {
     }
   }
 
-  _.shuffle(vals).forEach(v=>res.answer.push(dns['A']({
+  _.shuffle(vals).forEach(v=>res.answer.push(ndns['A']({
     name: req.question[0].name,
     address: v,
-    ttl: 0,
+    ttl: 0
   })));
   return res.send();
 });
@@ -172,31 +173,66 @@ function removeOne(id,nt){
   console.log(`Container ${tmp} removed`);
 }
 
+const reqObj={
+  question: {name:'0123456789012345678901234567890123456789',type:28,class:1},
+  server: {address:commander.dnsReslover || '8.8.8.8',port:53,type:'udp' },
+  timeout: commander.dnsTimeout || 2500
+};
+const cache={};
+const relcache={};
+
 function dnsProxy(req,res){
-  let start=Date.now();
-  let proxy=dns.Request({
-    question: req.question[0],
-    server: { address: commander.dnsReslover || '8.8.8.8', port: 53, type: 'udp' },
-    timeout: commander.dnsTimeout || 500,
-  });
+  const start=Date.now();
+  let key=req.question[0];
+  key=key.class+'_'+key.type+'_'+key.name;
+  if (cache[key]) {
+    fillReq(res, cache[key],req);
+    res.send();
+    commander.dnsCachedLogs && console.log(
+      `CACHED DNS type ${ndns.consts.QTYPE_TO_NAME[req.question[0].type]} for ${req.question[0].name} takes ${Date.now()-start}ms`
+    );
+    return;
+  }
+
+  reqObj.question=req.question[0];
+  let proxy=ndns.Request(reqObj);
 
   proxy.on('timeout', function () {
     console.warn(`Timeout in making request for ${req.question[0].name} after ${Date.now()-start}ms`);
   });
   proxy.on('message', function (err, answer) {
-    res.answer.push(...answer.answer);
-    res.authority.push(...answer.authority);
-    res.additional.push(...answer.additional);
-    res.header=answer.header;
-    res.header.id=req.header.id;
+    if (err){
+      console.error(err);
+      return;
+    }
+    fillReq(res,answer,req);
+    cache[key]={
+      answer:answer.answer,
+      authority:answer.authority,
+      additional:answer.additional,
+      header:answer.header
+    };
+    let startid=start/6e4^0;
+    if (!relcache[startid]){
+      relcache[startid]=[key];
+    } else {
+      relcache[startid].push(key);
+    }
   });
-  proxy.on('end', function () {
+  proxy.on('end', function (){
     res.send();
     commander.dnsLogs && console.log(
-      `DNS type ${dns.consts.QTYPE_TO_NAME[req.question[0].type]} for ${req.question[0].name} takes ${Date.now()-start}ms`
+      `DNS type ${ndns.consts.QTYPE_TO_NAME[req.question[0].type]} for ${req.question[0].name} takes ${Date.now()-start}ms`
     );
   });
   proxy.send();
+}
+function fillReq(res,answer,req){
+  res.answer.push(...answer.answer);
+  res.authority.push(...answer.authority);
+  res.additional.push(...answer.additional);
+  res.header=answer.header;
+  res.header.id=req.header.id;
 }
 
 function dnsErrorHandler(err) {
@@ -207,6 +243,34 @@ function dnsErrorHandler(err) {
 function debug(msg){
   commander.debug && console.warn(msg);
 }
+
+setTimeout(function callMe(){
+  const start=Date.now();
+  _.forEach(relcache,(i,k)=>{
+    if (k<start/6e4-1^0){
+      setImmediate(function(){
+        const start=Date.now();
+        let i=0;
+        relcache[k].forEach(key=>{
+          delete cache[key];
+          i++;
+        });
+        delete relcache[k];
+
+        if (Date.now()-start>10){
+          console.warn(`Garbage collector subroutine takes ${Date.now()-start}ms to remove ${i} records!`);
+        } else {
+          i && debug(`${i} cached records removed`);
+        }
+      });
+    }
+  });
+
+  setTimeout(callMe,6e4);
+  if (Date.now()-start>10){
+    console.warn(`Garbage collector takes ${Date.now()-start}ms!`);
+  }
+},6e4);
 
 process.on('SIGTERM', process.exit);
 process.on('SIGINT', process.exit);
