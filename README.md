@@ -24,14 +24,16 @@ All queries not ending with _.discovery_ will be forwarded to 8.8.8.8 , or to th
 ```
   Usage:  [OPTIONS] [ENDPOINT]:[PORT]
 
+
   Options:
 
     -h, --help             output usage information
     -V, --version          output the version number
     --debug                Logging more information
     --dns-logs             Logging dns queries information
+    --dns-cached-logs      Logging cached dns queries information
     --dns-resolver <host>  Forward recursive questions to this resolver. Default 8.8.8.8
-    --dns-timeout <num>    Resolve timeout in ms for recursive queries. Default 500ms
+    --dns-timeout <num>    Resolve timeout in ms for recursive queries. Default 2500ms
     --dns-bind <ip>        Bind DNS server for this address
     --network <name>       Multi-host default network name
 ```

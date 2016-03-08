@@ -180,6 +180,7 @@ const reqObj={
 };
 const cache={};
 const relcache={};
+const pcache={};
 
 function dnsProxy(req,res){
   const start=Date.now();
@@ -189,43 +190,66 @@ function dnsProxy(req,res){
     fillReq(res, cache[key],req);
     res.send();
     commander.dnsCachedLogs && console.log(
-      `CACHED DNS type ${ndns.consts.QTYPE_TO_NAME[req.question[0].type]} for ${req.question[0].name} takes ${Date.now()-start}ms`
+      `CACHED DNS type ${ndns.consts.QTYPE_TO_NAME[req.question[0].type]} for ${req.question[0].name} [${req.header.id}] takes ${Date.now()-start}ms`
     );
     return;
   }
 
-  reqObj.question=req.question[0];
-  let proxy=ndns.Request(reqObj);
+  if (pcache[key]){
+    pcache[key].then(cachkey=>{
+      fillReq(res,cachkey,req);
+      res.send();
+      commander.dnsCachedLogs && console.log(
+        `PCACHED DNS type ${ndns.consts.QTYPE_TO_NAME[req.question[0].type]} for ${req.question[0].name} [${req.header.id}] takes ${Date.now()-start}ms`
+      );
+    }).catch(dnsProxy.bind(null, req, res));
+    return;
+  }
 
-  proxy.on('timeout', function () {
-    console.warn(`Timeout in making request for ${req.question[0].name} after ${Date.now()-start}ms`);
+  pcache[key]=new Promise((resolve,reject)=>{
+    reqObj.question=req.question[0];
+    let proxy=ndns.Request(reqObj);
+
+    proxy.on('timeout', function () {
+      res.send();
+      console.warn(`Timeout in making request for ${req.question[0].name} [${req.header.id}] after ${Date.now()-start}ms`);
+      delete pcache[key];
+      reject();
+    });
+    proxy.on('message', function (err, answer) {
+      if (err){
+        res.send();
+        console.error(err);
+        delete pcache[key];
+        return reject();
+      }
+      fillReq(res,answer,req);
+      res.send();
+      commander.dnsLogs && console.log(
+        `DNS type ${ndns.consts.QTYPE_TO_NAME[req.question[0].type]} for ${req.question[0].name} [${req.header.id}] takes ${Date.now()-start}ms`
+      );
+
+      cache[key] = {
+        answer: answer.answer,
+        authority: answer.authority,
+        additional: answer.additional,
+        header: answer.header
+      };
+      delete pcache[key];
+      resolve(cache[key]);
+
+      let startid=start/6e4^0;
+      if (!relcache[startid]){
+        relcache[startid]=[key];
+      } else {
+        relcache[startid].push(key);
+      }
+    });
+    //proxy.on('end', function (){
+    //  //setTimeout(res.send.bind(res),10);
+    //});
+    proxy.send();
   });
-  proxy.on('message', function (err, answer) {
-    if (err){
-      console.error(err);
-      return;
-    }
-    fillReq(res,answer,req);
-    cache[key]={
-      answer:answer.answer,
-      authority:answer.authority,
-      additional:answer.additional,
-      header:answer.header
-    };
-    let startid=start/6e4^0;
-    if (!relcache[startid]){
-      relcache[startid]=[key];
-    } else {
-      relcache[startid].push(key);
-    }
-  });
-  proxy.on('end', function (){
-    res.send();
-    commander.dnsLogs && console.log(
-      `DNS type ${ndns.consts.QTYPE_TO_NAME[req.question[0].type]} for ${req.question[0].name} takes ${Date.now()-start}ms`
-    );
-  });
-  proxy.send();
 }
 function fillReq(res,answer,req){
   res.answer.push(...answer.answer);
