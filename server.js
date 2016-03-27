@@ -32,12 +32,13 @@ if (commander.args[0]) {
 const emitter = new (require('docker-events'))({docker});
 const ndns=require('native-dns');
 const server = ndns.createServer();
+let server_done=false;
 
-const nodes={};
+let nodes={};
 
 emitter.on("connect", function() {
   debug("Connected to docker api.");
-  server.serve(53,commander.dnsBind || '0.0.0.0');
+  server_done=server_done || server.serve(53,commander.dnsBind || '0.0.0.0') || true;
 
   docker.listContainers({},function(err,data){
     if (err){
@@ -48,12 +49,13 @@ emitter.on("connect", function() {
   });
 });
 emitter.on("disconnect", function() {
-  // :TODO What can I do here?
   console.error("Disconnected from docker api. Reconnecting.");
+  nodes={};
 });
 
 emitter.on('error',function(err){
   console.error(err.message);
+  process.exit();
 });
 
 emitter.on("start", function(message) {
