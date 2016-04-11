@@ -4,5 +4,5 @@ EXPOSE 53
 
 WORKDIR /srv/www/app
 COPY ./server.js ./package.json ./
-RUN npm install
+RUN npm install && rm -rf /root/.npm
 ENTRYPOINT ["node","server.js"]
