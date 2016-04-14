@@ -36,4 +36,5 @@ All queries not ending with _.discovery_ will be forwarded to 8.8.8.8 , or to th
     --dns-timeout <num>    Resolve timeout in ms for recursive queries. Default 2500ms
     --dns-bind <ip>        Bind DNS server for this address
     --network <name>       Multi-host default network name
+    --tld <tld>            TLD instead of .discovery
 ```
