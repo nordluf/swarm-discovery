@@ -10,7 +10,7 @@ commander
   .option('--dns-logs', 'Logging dns queries information')
   .option('--dns-cached-logs', 'Logging cached dns queries information')
   .option('--dns-resolver <host>', 'Forward recursive questions to this resolver. Default 8.8.8.8')
-  .option('--dns-timeout <num>', 'Resolve timeout in ms for recursive queries. Default 2500ms')
+  .option('--dns-timeout <num>', 'Resolve timeout in microseconds for recursive queries. Default 2500ms')
   .option('--dns-bind <ip>', 'Bind DNS server for this address')
   .option('--network <name>', 'Multi-host default network name')
   .option('--tld <tld>', 'TLD instead of .discovery')
@@ -37,17 +37,21 @@ let server_done = false;
 
 let nodes = {};
 let ips = {};
+let contNet = {};
 
 emitter.on("connect", function () {
   debug("Connected to docker api.");
-  server_done = server_done || server.serve(53, commander.dnsBind || '0.0.0.0') || true;
 
   docker.listContainers({}, function (err, data) {
     if (err) {
       console.error(err.message);
+      console.error(err);
+      process.exit();
       return;
     }
     data.map(i=>addOne(i.Id, (Date.now() - 1e3) * 1e6));
+    server_done = server_done || server.serve(53, commander.dnsBind || '0.0.0.0') || true;
+    debug("Server is starting...");
   });
 });
 emitter.on("disconnect", function () {
@@ -93,14 +97,22 @@ server.on('request', function (req, res) {
     return dnsProxy(req, res);
   }
 
-  if (reqType == 'AAAA'){
+  if (reqType == 'AAAA') {
     return res.send();
   }
 
   if (name.length == 2) {
+    let tryIps=function(nm){
+      return ips[nm] && ips[nm][name[0]] && doRet(ips[nm][name[0]], res, req);
+    };
+    if(contNet[req.address.address]) {
+      if (tryIps(contNet[req.address.address])){
+        return;
+      }
+    }
     if (commander.network) {
-      if (ips[commander.network] && ips[commander.network][name[0]]) {
-        return doRet(ips[commander.network][name[0]], res, req);
+      if (tryIps(commander.network)){
+        return;
       }
     }
   } else {
@@ -135,6 +147,7 @@ function doRet(obj, res, req) {
     ttl: 0
   }));
   res.send();
+  return true;
 }
 
 server.on('error', dnsErrorHandler);
@@ -156,7 +169,7 @@ function addOne(id, nt) {
       return;
     }
 
-    let ip = null;
+    let ip = null, net = null;
     nodes[id] = {
       name: data.Name.slice(1).toLowerCase(),
       netNames: _.mapValues(data.NetworkSettings.Networks, 'Aliases'),
@@ -167,10 +180,31 @@ function addOne(id, nt) {
     nodes[id].ip = ip;
 
     _.reduce(nodes[id].netNames, (c, v, k)=>(ips[k] || (ips[k] = {})) && v && v.forEach(i=>
-      (ips[k][i] || (ips[k][i] = {ip: [], p: 0})) && ips[k][i].ip.push(nodes[id].ips[k]))
-      , 0);
+      (ips[k][i] || (ips[k][i] = {ip: [], p: 0})) && ips[k][i].ip.push(nodes[id].ips[net = k])
+    ), 0);
 
     console.log(`Container ${nodes[id].name} added`);
+
+    docker.listNetworks({filters: {"name": {"docker_gwbridge": true}}}, (err, data)=> {
+      if (err) {
+        console.error(err.message);
+        console.error(err);
+        process.exit();
+        return;
+      }
+      if (!data || !data[0] || data[0].Name != 'docker_gwbridge' || !data[0].Containers) {
+        console.error('No docker_gwbridge network! Auto network recognition disabled!');
+        return;
+      }
+      if (!data[0].Containers[id] || !data[0].Containers[id].IPv4Address) {
+        console.error('No ' + id + ' container in docker_gwbridge network! Auto network recognition for this container disabled!');
+        return
+      }
+      if (net) {
+        nodes[id].gip = data[0].Containers[id].IPv4Address.slice(0, -3);
+        contNet[nodes[id].gip] = net;
+      }
+    });
   });
 }
 
@@ -184,6 +218,10 @@ function removeOne(id, nt) {
     return;
   }
   const tmp = nodes[id].name;
+
+  if (nodes[id].gip){
+    delete contNet[nodes[id].gip];
+  }
 
   _.reduce(nodes[id].netNames, (c, v, k)=>v && v.forEach(i=>
     !ips[k][i].ip.splice(ips[k][i].ip.indexOf(nodes[id].ips[k]), 1) ||
