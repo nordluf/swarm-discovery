@@ -97,21 +97,21 @@ server.on('request', function (req, res) {
     return dnsProxy(req, res);
   }
 
-  if (reqType == 'AAAA') {
-    return res.send();
-  }
+  // if (reqType == 'AAAA') {
+  //   return res.send();
+  // }
 
   if (name.length == 2) {
-    let tryIps=function(nm){
+    let tryIps = function (nm) {
       return ips[nm] && ips[nm][name[0]] && doRet(ips[nm][name[0]], res, req);
     };
-    if(contNet[req.address.address]) {
-      if (tryIps(contNet[req.address.address])){
+    if (contNet[req.address.address]) {
+      if (tryIps(contNet[req.address.address])) {
         return;
       }
     }
     if (commander.network) {
-      if (tryIps(commander.network)){
+      if (tryIps(commander.network)) {
         return;
       }
     }
@@ -169,7 +169,7 @@ function addOne(id, nt) {
       return;
     }
 
-    let ip = null, net = null;
+    let ip = null;
     nodes[id] = {
       name: data.Name.slice(1).toLowerCase(),
       netNames: _.mapValues(data.NetworkSettings.Networks, 'Aliases'),
@@ -180,10 +180,15 @@ function addOne(id, nt) {
     nodes[id].ip = ip;
 
     _.reduce(nodes[id].netNames, (c, v, k)=>(ips[k] || (ips[k] = {})) && v && v.forEach(i=>
-      (ips[k][i] || (ips[k][i] = {ip: [], p: 0})) && ips[k][i].ip.push(nodes[id].ips[net = k])
+      (ips[k][i] || (ips[k][i] = {ip: [], p: 0})) && ips[k][i].ip.push(nodes[id].ips[k])
     ), 0);
 
     console.log(`Container ${nodes[id].name} added`);
+
+    let net = Object.keys(nodes[id].ips);
+    if (!net) {
+      return;
+    }
 
     docker.listNetworks({filters: {"name": {"docker_gwbridge": true}}}, (err, data)=> {
       if (err) {
@@ -200,10 +205,8 @@ function addOne(id, nt) {
         console.error('No ' + id + ' container in docker_gwbridge network! Auto network recognition for this container disabled!');
         return
       }
-      if (net) {
-        nodes[id].gip = data[0].Containers[id].IPv4Address.slice(0, -3);
-        contNet[nodes[id].gip] = net;
-      }
+      nodes[id].gip = data[0].Containers[id].IPv4Address.slice(0, -3);
+      contNet[nodes[id].gip] = net[0];
     });
   });
 }
@@ -219,7 +222,7 @@ function removeOne(id, nt) {
   }
   const tmp = nodes[id].name;
 
-  if (nodes[id].gip){
+  if (nodes[id].gip) {
     delete contNet[nodes[id].gip];
   }
 
