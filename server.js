@@ -1,10 +1,13 @@
 "use strict";
 const _ = require('lodash');
 const commander = require('commander');
+const Promise = require('bluebird');
+const fs = require('fs');
+const isc = require('ip-subnet-calculator');
 
 // :TODO add settings based on env vars and arguments
 commander
-  .version('0.0.1')
+  .version('0.1.0')
   .usage('[OPTIONS] [ENDPOINT]:[PORT]')
   .option('--debug', 'Logging more information')
   .option('--dns-logs', 'Logging dns queries information')
@@ -14,6 +17,7 @@ commander
   .option('--dns-bind <ip>', 'Bind DNS server for this address')
   .option('--network <name>', 'Multi-host default network name')
   .option('--tld <tld>', 'TLD instead of .discovery')
+  .option('--no-auto-networks <tld>', 'Disable auto networks monitoring and recognitoin')
   .parse(process.argv);
 
 let docker;
@@ -36,27 +40,68 @@ const server = ndns.createServer();
 let server_done = false;
 
 let nodes = {};
+let networks = [];
 let ips = {};
-let contNet = {};
+let dockerId;
 
 emitter.on("connect", function () {
   debug("Connected to docker api.");
+  let props = {
+    containers: Promise.fromCallback(cb=>docker.listContainers({}, cb))
+      .then(data=>data.map(i=>addOne(i.Id, (Date.now() - 1e3) * 1e6).reflect()))
+      .all()
+  };
+  if (!commander.noAutoNetworks) {
+    props.networks = Promise.fromCallback(cb=>docker.listNetworks({}, cb))
+      .filter(i=>i && i.Driver == 'overlay');
+    props.did = Promise.fromCallback(cb=>fs.readFile('/proc/1/cpuset', {encoding: 'ascii'}, cb));
+  }
+  Promise.props(props)
+    .then(i=> {
+      if (commander.noAutoNetworks) {
+        return;
+      }
+      if (!i.did || !(dockerId = /^\/docker\/([0-9a-f]+)\s*$/gm.exec(i.did))) {
+        commander.noAutoNetworks = true;
+        return;
+      }
+      dockerId = dockerId[1];
 
-  docker.listContainers({}, function (err, data) {
-    if (err) {
+      return Promise.fromCallback(cb=>docker.getContainer(dockerId).inspect(cb))
+        .then(data=> {
+          return _.map(data.NetworkSettings.Networks, net=>
+            !_.find(i.networks, {Id: net.NetworkID}) ? false :
+              Promise.fromCallback(cb=>docker.getNetwork(net.NetworkID).disconnect({Container: dockerId, Force: true}, cb))
+          );
+        })
+        .all()
+        .then(()=>Promise.all(_.map(i.networks, net=>connect2Net(net.Id, true))))
+        .then(refillOwnIp)
+        .catch(err=> {
+          console.error(err.json);
+          console.error(err);
+          commander.noAutoNetworks = true;
+        })
+    })
+    .then(()=> {
+      if (commander.noAutoNetworks) {
+        console.log('Auto network recognition disabled.');
+      }
+
+      server_done = server_done || server.serve(53, commander.dnsBind || '0.0.0.0') || true;
+      console.log("Server is starting...");
+    })
+    .catch(err=> {
       console.error(err.message);
       console.error(err);
       process.exit();
-      return;
-    }
-    data.map(i=>addOne(i.Id, (Date.now() - 1e3) * 1e6));
-    server_done = server_done || server.serve(53, commander.dnsBind || '0.0.0.0') || true;
-    debug("Server is starting...");
-  });
+    });
 });
 emitter.on("disconnect", function () {
   console.error("Disconnected from docker api. Reconnecting.");
   nodes = {};
+  ips = {};
+  networks = [];
 });
 
 emitter.on('error', function (err) {
@@ -81,6 +126,27 @@ emitter.on("unpause", function (message) {
   debug(`Container unpaused: ${message.id}`);
 });
 
+if (!commander.noAutoNetworks) {
+  emitter.on("_message", function (msg) {
+    if (msg.Type != 'network' || !msg.Actor || !msg.Actor.Attributes) {
+      return;
+    }
+
+    if (msg.Action == 'create') {
+      if (msg.Actor.Attributes.type == 'overlay') {
+        connect2Net(msg.Actor.ID);
+      }
+    } else if (msg.Action == 'destroy') {
+      disconnect2Net(msg.Actor.ID, true);
+    } else if (msg.Action == 'disconnect') {
+      if (msg.Actor.Attributes.container == dockerId) {
+        disconnect2Net(msg.Actor.ID);
+      }
+    }
+
+  });
+}
+
 emitter.start();
 
 server.on('request', function (req, res) {
@@ -90,34 +156,31 @@ server.on('request', function (req, res) {
   }
 
   let name = req.question[0].name.toLowerCase().split('.');
-  if (name.length == 1 || name.length > 3) {
+  if (name.length > 3 || name.length == 1 && commander.noAutoNetworks) {
     return dnsProxy(req, res);
   }
   if (name.slice(-1)[0] != (commander.tld || 'discovery')) {
     return dnsProxy(req, res);
   }
 
-  // if (reqType == 'AAAA') {
-  //   return res.send();
-  // }
-
-  if (name.length == 2) {
+  if (name.length == 1) {
+    return ownIps(req, res);
+  } else if (name.length == 2) {
     let tryIps = function (nm) {
-      return ips[nm] && ips[nm][name[0]] && doRet(ips[nm][name[0]], res, req);
+      return nm && ips[nm] && ips[nm][name[0]] && doRet(ips[nm][name[0]], res, req, reqType);
     };
-    if (contNet[req.address.address]) {
-      if (tryIps(contNet[req.address.address])) {
-        return;
-      }
+
+    if (!commander.noAutoNetworks && tryIps(findNetName(req.address.address))) {
+      return;
     }
-    if (commander.network) {
-      if (tryIps(commander.network)) {
-        return;
-      }
+
+    if (tryIps(commander.network)) {
+      return;
     }
+
   } else {
     if (ips[name[1]] && ips[name[1]][name[0]]) {
-      return doRet(ips[name[1]][name[0]], res, req);
+      return doRet(ips[name[1]][name[0]], res, req, reqType);
     }
   }
 
@@ -134,83 +197,81 @@ server.on('request', function (req, res) {
         ttl: 0
       }))
     });
-    return doRet(vals.ip, res, req);
+    return doRet(vals.ip, res, req, reqType);
   }
 
   return res.send();
 });
 
-function doRet(obj, res, req) {
+function doRet(obj, res, req, reqType) {
   res.answer.push(ndns['A']({
     name: req.question[0].name,
-    address: obj instanceof Object ? obj.ip[(obj.p > obj.ip.length - 1 && (obj.p = 0)) || obj.p++] : obj,
+    address: obj instanceof Object ? obj.ip[(obj.p > obj.ip.length - 1 && (obj.p = 0)) || reqType == 'A' ? obj.p++ : obj.p] : obj,
     ttl: 0
   }));
   res.send();
   return true;
 }
+function ownIps(req, res) {
+  let net = findNetName(req.address.address);
+  if (net) {
+    res.answer.push(ndns['A']({
+      name: net+'.'+req.question[0].name,
+      address: _.find(networks, i=>i.name == net && i.ip).ip,
+      ttl: 0
+    }));
+  } else {
+    networks.forEach(net=>net.ip && res.answer.push(ndns['A']({
+      name: net.name+'.'+req.question[0].name,
+      address: net.ip,
+      ttl: 0
+    })));
+  }
+  res.send();
+  return true;
+}
+function findNetName(ip, id) {
+  ip = isc.toDecimal(ip);
+  let obj = _.find(networks, net=>net.ipLow < ip && ip < net.ipHigh);
+  return obj ? obj[id ? id : 'name'] : null;
+}
+
 
 server.on('error', dnsErrorHandler);
 server.on('socketError', dnsErrorHandler);
 server.on('close', dnsErrorHandler);
 
 function addOne(id, nt) {
-  docker.getContainer(id).inspect({}, function (err, data) {
-    if (err) {
+  return Promise.fromCallback(cb=>docker.getContainer(id).inspect({}, cb))
+    .then(data=> {
+      if (!data || !data.State || !data.State.Running) {
+        console.error(`Container ${id} not running`);
+        return;
+      }
+      if (data.State.Paused) {
+        console.error(`Container ${id} paused`);
+        return;
+      }
+      let ip = null;
+      nodes[id] = {
+        name: data.Name.slice(1).toLowerCase(),
+        netNames: _.mapValues(data.NetworkSettings.Networks, 'Aliases'),
+        binds: _(data.NetworkSettings.Ports).map(v=>v && v.map(v1=>(ip = v1.HostIp) + ':' + v1.HostPort)).flatten().compact().value(),
+        ips: _.mapValues(data.NetworkSettings.Networks, 'IPAddress'),
+        added: nt
+      };
+      nodes[id].ip = ip;
+
+      _.reduce(nodes[id].netNames, (c, v, k)=>(ips[k] || (ips[k] = {})) && v && v.forEach(i=>
+        (ips[k][i] || (ips[k][i] = {ip: [], p: 0})) && ips[k][i].ip.push(nodes[id].ips[k])
+      ), 0);
+
+      console.log(`Container ${nodes[id].name} added`);
+    })
+    .catch(err=> {
       console.error(`Error ${err.statusCode}: '${err.reason}' for container ${id}`);
-      return;
-    }
-    if (!data || !data.State || !data.State.Running) {
-      console.error(`Container ${id} not running`);
-      return;
-    }
-    if (data.State.Paused) {
-      console.error(`Container ${id} paused`);
-      return;
-    }
-
-    let ip = null;
-    nodes[id] = {
-      name: data.Name.slice(1).toLowerCase(),
-      netNames: _.mapValues(data.NetworkSettings.Networks, 'Aliases'),
-      binds: _(data.NetworkSettings.Ports).map(v=>v && v.map(v1=>(ip = v1.HostIp) + ':' + v1.HostPort)).flatten().compact().value(),
-      ips: _.mapValues(data.NetworkSettings.Networks, 'IPAddress'),
-      added: nt
-    };
-    nodes[id].ip = ip;
-
-    _.reduce(nodes[id].netNames, (c, v, k)=>(ips[k] || (ips[k] = {})) && v && v.forEach(i=>
-      (ips[k][i] || (ips[k][i] = {ip: [], p: 0})) && ips[k][i].ip.push(nodes[id].ips[k])
-    ), 0);
-
-    console.log(`Container ${nodes[id].name} added`);
-
-    let net = Object.keys(nodes[id].ips);
-    if (!net) {
-      return;
-    }
-
-    docker.listNetworks({filters: {"name": {"docker_gwbridge": true}}}, (err, data)=> {
-      if (err) {
-        console.error(err.message);
-        console.error(err);
-        process.exit();
-        return;
-      }
-      if (!data || !data[0] || data[0].Name != 'docker_gwbridge' || !data[0].Containers) {
-        console.error('No docker_gwbridge network! Auto network recognition disabled!');
-        return;
-      }
-      if (!data[0].Containers[id] || !data[0].Containers[id].IPv4Address) {
-        console.error('No ' + id + ' container in docker_gwbridge network! Auto network recognition for this container disabled!');
-        return
-      }
-      nodes[id].gip = data[0].Containers[id].IPv4Address.slice(0, -3);
-      contNet[nodes[id].gip] = net[0];
     });
-  });
 }
-
 function removeOne(id, nt) {
   if (!nodes[id]) {
     console.error(`Container ${id} not exists.`);
@@ -222,10 +283,6 @@ function removeOne(id, nt) {
   }
   const tmp = nodes[id].name;
 
-  if (nodes[id].gip) {
-    delete contNet[nodes[id].gip];
-  }
-
   _.reduce(nodes[id].netNames, (c, v, k)=>v && v.forEach(i=>
     !ips[k][i].ip.splice(ips[k][i].ip.indexOf(nodes[id].ips[k]), 1) ||
     ips[k][i].ip.length || !(delete ips[k][i]) ||
@@ -234,6 +291,52 @@ function removeOne(id, nt) {
 
   delete nodes[id];
   console.log(`Container ${tmp} removed`);
+}
+
+function connect2Net(netId, skip) {
+  let obj = docker.getNetwork(netId);
+  let netName;
+  return Promise.fromCallback(cb=>obj.inspect(cb))
+    .then(nets=> {
+        netName = nets.Name;
+        return nets.IPAM.Config.map(net=> {
+          let tmp = net.Subnet.split('/');
+          tmp = isc.calculateSubnetMask(tmp[0], tmp[1]);
+          return {
+            ipLow: tmp.ipLow,
+            ipHigh: tmp.ipHigh,
+            netId: netId,
+            name: netName,
+            ip: null
+          };
+        })
+      }
+    )
+    .tap(()=>Promise.fromCallback(cb=>obj.connect({Container: dockerId}, cb)))
+    .then(nets=> {
+      networks.push(...nets);
+      console.log(`Connected to a network ${nets[0].name}`);
+    })
+    .then(()=>skip ? true : refillOwnIp())
+    .catch(err=> {
+      console.error(`Auto network recognition and in-network DNS for network ${netName} [${netId}] disabled:`);
+      console.error(err);
+    });
+}
+function disconnect2Net(netId, remove) {
+  networks = _.reject(networks, {netId: netId});
+  if (!remove) {
+    console.log(`Disconnected from a network ${netId}`);
+  }
+}
+function refillOwnIp() {
+  return Promise.fromCallback(cb=>docker.getContainer(dockerId).inspect(cb))
+    .then(data=> {
+      _.each(data.NetworkSettings.Networks, net=> {
+        let ind = _.findIndex(networks, {netId: net.NetworkID});
+        ~ind ? networks[ind].ip = net.IPAddress : false;
+      });
+    })
 }
 
 const reqObj = {

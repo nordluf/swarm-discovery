@@ -1,6 +1,6 @@
 {
   "name": "swarm-discovery",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "DNS based service discovery for swarm multi-host networks",
   "main": "server.js",
   "scripts": {
@@ -13,9 +13,11 @@
     "url": "git://github.com/nordluf/swarm-discovery.git"
   },
   "dependencies": {
+    "bluebird": "^3.3.5",
     "commander": "^2.9.0",
     "docker-events": "0.0.2",
     "dockerode": "^2.2.9",
+    "ip-subnet-calculator": "^1.0.3",
     "lodash": "^4.5.0",
     "native-dns": "^0.7.0"
   }
