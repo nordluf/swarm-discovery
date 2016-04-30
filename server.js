@@ -17,7 +17,7 @@ commander
   .option('--dns-bind <ip>', 'Bind DNS server for this address')
   .option('--network <name>', 'Multi-host default network name')
   .option('--tld <tld>', 'TLD instead of .discovery')
-  .option('--no-auto-networks <tld>', 'Disable auto networks monitoring and recognitoin')
+  .option('--no-auto-networks <tld>', 'Disable auto networks monitoring and recognition')
   .parse(process.argv);
 
 let docker;
