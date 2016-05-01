@@ -128,7 +128,7 @@ emitter.on("unpause", function (message) {
 
 if (!commander.noAutoNetworks) {
   emitter.on("_message", function (msg) {
-    if (msg.Type != 'network' || !msg.Actor || !msg.Actor.Attributes) {
+    if (!msg || msg.Type != 'network' || !msg.Actor || !msg.Actor.Attributes) {
       return;
     }
 
