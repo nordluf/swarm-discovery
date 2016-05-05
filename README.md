@@ -43,6 +43,7 @@ All queries not ending with _.discovery_ (or TLD passed with --tld option) will 
     --dns-timeout <num>       Resolve timeout in microseconds for recursive queries. Default 2500ms
     --dns-bind <ip>           Bind DNS server for this address
     --network <name>          Multi-host default network name
+    --skip-ip <num>           Skip <num> ip's from the end to auto-bind
     --tld <tld>               TLD instead of .discovery
     --no-auto-networks <tld>  Disable auto networks monitoring and recognition
 ```

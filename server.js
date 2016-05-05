@@ -16,11 +16,16 @@ commander
   .option('--dns-timeout <num>', 'Resolve timeout in microseconds for recursive queries. Default 2500ms')
   .option('--dns-bind <ip>', 'Bind DNS server for this address')
   .option('--network <name>', 'Multi-host default network name')
+  .option('--skip-ip <num>', 'Skip <num> ip\'s from the end to auto-bind')
   .option('--tld <tld>', 'TLD instead of .discovery')
   .option('--no-auto-networks <tld>', 'Disable auto networks monitoring and recognition')
   .parse(process.argv);
 
 let docker;
+if (commander.skipIp && commander.skipIp != parseInt(commander.skipIp)) {
+  console.error('Error: --skip-ip has to be num');
+  process.exit();
+}
 if (commander.args[0]) {
   // so we can use http://apiurl:port
   if (commander.args[0].match(/:\d+$/)) {
@@ -62,6 +67,7 @@ emitter.on("connect", function () {
         return;
       }
       if (!i.did || !(dockerId = /^\/docker\/([0-9a-f]+)\s*$/gm.exec(i.did))) {
+        console.log('swarm-discovery started not as Docker container');
         commander.noAutoNetworks = true;
         return;
       }
@@ -81,6 +87,7 @@ emitter.on("connect", function () {
           console.error(err.json);
           console.error(err);
           commander.noAutoNetworks = true;
+          process.exit();
         })
     })
     .then(()=> {
@@ -150,6 +157,7 @@ if (!commander.noAutoNetworks) {
 emitter.start();
 
 server.on('request', function (req, res) {
+  res.timestamp = Date.now();
   const reqType = ndns.consts.QTYPE_TO_NAME[req.question[0].type];
   if (reqType != 'A' && reqType != 'AAAA') {
     return dnsProxy(req, res);
@@ -200,7 +208,7 @@ server.on('request', function (req, res) {
     return doRet(vals.ip, res, req, reqType);
   }
 
-  return res.send();
+  return checkTime(res);
 });
 
 function doRet(obj, res, req, reqType) {
@@ -209,26 +217,33 @@ function doRet(obj, res, req, reqType) {
     address: obj instanceof Object ? obj.ip[(obj.p > obj.ip.length - 1 && (obj.p = 0)) || reqType == 'A' ? obj.p++ : obj.p] : obj,
     ttl: 0
   }));
+  return checkTime(res);
+}
+function checkTime(res) {
   res.send();
+  if (Date.now() - res.timestamp > 20) {
+    console.warn(`Request ${res.question[0].name} takes ${Date.now() - res.timestamp}ms to complete!`);
+  }
+
   return true;
 }
+
 function ownIps(req, res) {
   let net = findNetName(req.address.address);
   if (net) {
     res.answer.push(ndns['A']({
-      name: net+'.'+req.question[0].name,
+      name: net + '.' + req.question[0].name,
       address: _.find(networks, i=>i.name == net && i.ip).ip,
       ttl: 0
     }));
   } else {
     networks.forEach(net=>net.ip && res.answer.push(ndns['A']({
-      name: net.name+'.'+req.question[0].name,
+      name: net.name + '.' + req.question[0].name,
       address: net.ip,
       ttl: 0
     })));
   }
-  res.send();
-  return true;
+  return checkTime(res);
 }
 function findNetName(ip, id) {
   ip = isc.toDecimal(ip);
@@ -266,7 +281,7 @@ function addOne(id, nt) {
         (ips[k][i] || (ips[k][i] = {ip: [], p: 0})) && ips[k][i].ip.push(nodes[id].ips[k])
       ), 0);
 
-      console.log(`Container ${nodes[id].name} added`);
+      debug(`Container ${nodes[id].name} added`);
     })
     .catch(err=> {
       console.error(`Error ${err.statusCode}: '${err.reason}' for container ${id}`);
@@ -290,18 +305,20 @@ function removeOne(id, nt) {
   ), 0);
 
   delete nodes[id];
-  console.log(`Container ${tmp} removed`);
+  debug(`Container ${tmp} removed`);
 }
 
 function connect2Net(netId, skip) {
   let obj = docker.getNetwork(netId);
   let netName;
+  let lastIp = null;
   return Promise.fromCallback(cb=>obj.inspect(cb))
     .then(nets=> {
         netName = nets.Name;
         return nets.IPAM.Config.map(net=> {
           let tmp = net.Subnet.split('/');
           tmp = isc.calculateSubnetMask(tmp[0], tmp[1]);
+          lastIp = isc.toString(tmp.ipHigh - 1 - (commander.skipIp || 0));
           return {
             ipLow: tmp.ipLow,
             ipHigh: tmp.ipHigh,
@@ -312,10 +329,17 @@ function connect2Net(netId, skip) {
         })
       }
     )
-    .tap(()=>Promise.fromCallback(cb=>obj.connect({Container: dockerId}, cb)))
+    .tap(()=>Promise.fromCallback(cb=>obj.connect({
+      Container: dockerId,
+      EndpointConfig: {
+        IPAMConfig: {
+          IPv4Address: lastIp
+        }
+      }
+    }, cb)))
     .then(nets=> {
       networks.push(...nets);
-      console.log(`Connected to a network ${nets[0].name}`);
+      debug(`Connected to a network ${nets[0].name}`);
     })
     .then(()=>skip ? true : refillOwnIp())
     .catch(err=> {
@@ -326,7 +350,7 @@ function connect2Net(netId, skip) {
 function disconnect2Net(netId, remove) {
   networks = _.reject(networks, {netId: netId});
   if (!remove) {
-    console.log(`Disconnected from a network ${netId}`);
+    debug(`Disconnected from a network ${netId}`);
   }
 }
 function refillOwnIp() {
