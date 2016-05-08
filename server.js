@@ -84,6 +84,7 @@ emitter.on("connect", function () {
         .then(()=>Promise.all(_.map(i.networks, net=>connect2Net(net.Id, true))))
         .then(refillOwnIp)
         .catch(err=> {
+          console.error('docker.getContainer error');
           console.error(err.json);
           console.error(err);
           commander.noAutoNetworks = true;
@@ -99,6 +100,7 @@ emitter.on("connect", function () {
       console.log("Server is starting...");
     })
     .catch(err=> {
+      console.error('Common startup error');
       console.error(err.message);
       console.error(err);
       process.exit();
@@ -112,7 +114,9 @@ emitter.on("disconnect", function () {
 });
 
 emitter.on('error', function (err) {
+  console.error('Emmiter error');
   console.error(err.message);
+  console.error(err);
   process.exit();
 });
 
@@ -409,6 +413,7 @@ function dnsProxy(req, res) {
     proxy.on('message', function (err, answer) {
       if (err) {
         res.send();
+        console.error('Proxy error');
         console.error(err);
         delete pcache[key];
         return reject();
@@ -450,6 +455,7 @@ function fillReq(res, answer, req) {
 }
 
 function dnsErrorHandler(err) {
+  console.error('DNS EH error');
   console.error(err.message);
   debug(err.stack);
   process.exit();
