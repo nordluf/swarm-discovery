@@ -233,6 +233,10 @@ function checkTime(res) {
 }
 
 function ownIps(req, res) {
+  console.log(nodes);
+  console.log(networks);
+  console.log(ips);
+
   let net = findNetName(req.address.address);
   if (net) {
     res.answer.push(ndns['A']({
