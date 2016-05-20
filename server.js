@@ -73,6 +73,9 @@ emitter.on("connect", function () {
       }
       dockerId = dockerId[1];
 
+      console.info('Debugging info about networks:');
+      console.info(i.networks);
+
       return Promise.fromCallback(cb=>docker.getContainer(dockerId).inspect(cb))
         .then(data=> {
           return _.map(data.NetworkSettings.Networks, net=>
@@ -500,3 +503,6 @@ setTimeout(function callMe() {
 
 process.on('SIGTERM', process.exit);
 process.on('SIGINT', process.exit);
+
+const memwatch = require('memwatch-next');
+memwatch.on('leak', function (info) {console.error(info)});
