@@ -21,7 +21,13 @@ commander
   .option('--no-auto-networks <tld>', 'Disable auto networks monitoring and recognition')
   .parse(process.argv);
 
-let docker;
+let docker; // Docker management object
+let nodes = {}; // Nodes list
+let networks = []; // Networks list
+let ips = {}; // Ips for autonetwork feature
+let dockerId; // Our docker id
+let server_done = false;
+
 if (commander.skipIp && commander.skipIp != parseInt(commander.skipIp)) {
   console.error('Error: --skip-ip has to be num');
   process.exit();
@@ -39,15 +45,9 @@ if (commander.args[0]) {
   docker = new require('dockerode')();
 }
 
-const emitter = new (require('docker-events'))({docker});
-const ndns = require('native-dns');
+const emitter = new (require('docker-events'))({docker}); // Docker events listener
+const ndns = require('native-dns'); // Native DNS object
 const server = ndns.createServer();
-let server_done = false;
-
-let nodes = {};
-let networks = [];
-let ips = {};
-let dockerId;
 
 emitter.on("connect", function () {
   debug("Connected to docker api.");
@@ -72,9 +72,6 @@ emitter.on("connect", function () {
         return;
       }
       dockerId = dockerId[1];
-
-      console.info('Debugging info about networks:');
-      console.info(i.networks);
 
       return Promise.fromCallback(cb=>docker.getContainer(dockerId).inspect(cb))
         .then(data=> {
@@ -157,7 +154,6 @@ if (!commander.noAutoNetworks) {
         disconnect2Net(msg.Actor.ID);
       }
     }
-
   });
 }
 
@@ -236,10 +232,6 @@ function checkTime(res) {
 }
 
 function ownIps(req, res) {
-  console.log(nodes);
-  console.log(networks);
-  console.log(ips);
-
   let net = findNetName(req.address.address);
   if (net) {
     res.answer.push(ndns['A']({
@@ -464,7 +456,8 @@ function fillReq(res, answer, req) {
 function dnsErrorHandler(err) {
   console.error('DNS EH error');
   console.error(err.message);
-  debug(err.stack);
+  console.error(err.stack);
+  console.error(err);
   process.exit();
 }
 function debug(msg) {
@@ -503,6 +496,3 @@ setTimeout(function callMe() {
 
 process.on('SIGTERM', process.exit);
 process.on('SIGINT', process.exit);
-
-const memwatch = require('memwatch-next');
-memwatch.on('leak', function (info) {console.error(info)});
