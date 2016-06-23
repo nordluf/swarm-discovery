@@ -2,3 +2,7 @@ node_modules/
 .idea/
 npm-debug.log
 .git/
+.gitignore
+Dockerfile
+.dockerignore
+README.md
