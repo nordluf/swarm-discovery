@@ -4,6 +4,7 @@ const commander = require('commander');
 const Promise = require('bluebird');
 const fs = require('fs');
 const isc = require('ip-subnet-calculator');
+const strg = require('./libstorage.js');
 
 // :TODO add settings based on env vars and arguments
 commander
@@ -22,9 +23,6 @@ commander
   .parse(process.argv);
 
 let docker; // Docker management object
-let nodes = {}; // Nodes list
-let networks = []; // Networks list
-let ips = {}; // Ips for autonetwork feature
 let dockerId; // Our docker id
 let server_done = false;
 
@@ -53,7 +51,7 @@ emitter.on("connect", function () {
   debug("Connected to docker api.");
   let props = {
     containers: Promise.fromCallback(cb=>docker.listContainers({}, cb))
-      .then(data=>data.map(i=>addOne(i.Id, (Date.now() - 1e3) * 1e6).reflect()))
+      .then(data=>data.map(i=>addOne(i.Id).reflect()))
       .all()
   };
   if (!commander.noAutoNetworks) {
@@ -62,6 +60,7 @@ emitter.on("connect", function () {
     props.did = Promise.fromCallback(cb=>fs.readFile('/proc/1/cpuset', {encoding: 'ascii'}, cb));
   }
   Promise.props(props)
+    .delay(1000)
     .then(i=> {
       if (commander.noAutoNetworks) {
         return;
@@ -72,19 +71,35 @@ emitter.on("connect", function () {
         return;
       }
       dockerId = dockerId[1];
+      console.log(`Swarm-discovery docker id: ${dockerId}`)
 
       return Promise.fromCallback(cb=>docker.getContainer(dockerId).inspect(cb))
+        .catch(err=> {
+          console.error('docker.getContainer error');
+          console.error(err);
+          process.exit();
+        })
         .then(data=> {
           return _.map(data.NetworkSettings.Networks, net=>
             !_.find(i.networks, {Id: net.NetworkID}) ? false :
               Promise.fromCallback(cb=>docker.getNetwork(net.NetworkID).disconnect({Container: dockerId, Force: true}, cb))
           );
         })
+        .catch(err=> {
+          console.error('docker.network().disconnect error');
+          console.error(err);
+          process.exit();
+        })
         .all()
         .then(()=>Promise.all(_.map(i.networks, net=>connect2Net(net.Id, true))))
+        .catch(err=> {
+          console.error('docker.network().connect error');
+          console.error(err);
+          process.exit();
+        })
         .then(refillOwnIp)
         .catch(err=> {
-          console.error('docker.getContainer error');
+          console.error('refillOwnIp error');
           console.error(err.json);
           console.error(err);
           commander.noAutoNetworks = true;
@@ -108,9 +123,6 @@ emitter.on("connect", function () {
 });
 emitter.on("disconnect", function () {
   console.error("Disconnected from docker api. Reconnecting.");
-  nodes = {};
-  ips = {};
-  networks = [];
 });
 
 emitter.on('error', function (err) {
@@ -178,11 +190,18 @@ server.on('request', function (req, res) {
     return ownIps(req, res);
   } else if (name.length == 2) {
     let tryIps = function (nm) {
-      return nm && ips[nm] && ips[nm][name[0]] && doRet(ips[nm][name[0]], res, req, reqType);
+      if (!nm) {
+        return false;
+      }
+      let obj = strg.getObject(nm, name[0]);
+      return obj?doRet(obj, res, req, reqType):false;
     };
 
-    if (!commander.noAutoNetworks && tryIps(findNetName(req.address.address))) {
-      return;
+    if (!commander.noAutoNetworks) {
+      let net = strg.getNetByIp(req.address.address);
+      if (net && tryIps(net.name)){
+        return;
+      }
     }
 
     if (tryIps(commander.network)) {
@@ -190,12 +209,13 @@ server.on('request', function (req, res) {
     }
 
   } else {
-    if (ips[name[1]] && ips[name[1]][name[0]]) {
-      return doRet(ips[name[1]][name[0]], res, req, reqType);
+    let obj = strg.getObject(name[1], name[0]);
+    if (obj) {
+      return doRet(obj, res, req, reqType);
     }
   }
 
-  let vals = _.find(nodes, {name: name[0]});
+  let vals = strg.getNodeByName(name[0]);
   if (vals && vals.ip) {
     _.forEach(vals.binds, v=> {
       v = v.split(':');
@@ -232,15 +252,15 @@ function checkTime(res) {
 }
 
 function ownIps(req, res) {
-  let net = findNetName(req.address.address);
+  let net = strg.getNetByIp(req.address.address);
   if (net) {
     res.answer.push(ndns['A']({
-      name: net + '.' + req.question[0].name,
-      address: _.find(networks, i=>i.name == net && i.ip).ip,
+      name: net.name + '.' + req.question[0].name,
+      address: net.ip,
       ttl: 0
     }));
   } else {
-    networks.forEach(net=>net.ip && res.answer.push(ndns['A']({
+    strg.getNetworks().forEach(net=>net.ip && res.answer.push(ndns['A']({
       name: net.name + '.' + req.question[0].name,
       address: net.ip,
       ttl: 0
@@ -248,12 +268,6 @@ function ownIps(req, res) {
   }
   return checkTime(res);
 }
-function findNetName(ip, id) {
-  ip = isc.toDecimal(ip);
-  let obj = _.find(networks, net=>net.ipLow < ip && ip < net.ipHigh);
-  return obj ? obj[id ? id : 'name'] : null;
-}
-
 
 server.on('error', dnsErrorHandler);
 server.on('socketError', dnsErrorHandler);
@@ -270,45 +284,28 @@ function addOne(id, nt) {
         console.error(`Container ${id} paused`);
         return;
       }
-      let ip = null;
-      nodes[id] = {
-        name: data.Name.slice(1).toLowerCase(),
-        netNames: _.mapValues(data.NetworkSettings.Networks, 'Aliases'),
-        binds: _(data.NetworkSettings.Ports).map(v=>v && v.map(v1=>(ip = v1.HostIp) + ':' + v1.HostPort)).flatten().compact().value(),
-        ips: _.mapValues(data.NetworkSettings.Networks, 'IPAddress'),
-        added: nt
-      };
-      nodes[id].ip = ip;
+      let node = strg.addNode(data,nt);
 
-      _.reduce(nodes[id].netNames, (c, v, k)=>(ips[k] || (ips[k] = {})) && v && v.forEach(i=>
-        (ips[k][i] || (ips[k][i] = {ip: [], p: 0})) && ips[k][i].ip.push(nodes[id].ips[k])
-      ), 0);
-
-      debug(`Container ${nodes[id].name} added`);
+      debug(`Container ${node.name} added`);
     })
     .catch(err=> {
       console.error(`Error ${err.statusCode}: '${err.reason}' for container ${id}`);
+      console.error(err);
     });
 }
 function removeOne(id, nt) {
-  if (!nodes[id]) {
+  let node = strg.getNode(id);
+  if (!node) {
     console.error(`Container ${id} not exists.`);
     return;
   }
-  if (nodes[id].added >= nt) {
+  if (node.added >= nt) {
     console.error(`Some action with ${id} already happened.`);
     return;
   }
-  const tmp = nodes[id].name;
 
-  _.reduce(nodes[id].netNames, (c, v, k)=>v && v.forEach(i=>
-    !ips[k][i].ip.splice(ips[k][i].ip.indexOf(nodes[id].ips[k]), 1) ||
-    ips[k][i].ip.length || !(delete ips[k][i]) ||
-    Object.keys(ips[k]).length || (delete ips[k])
-  ), 0);
-
-  delete nodes[id];
-  debug(`Container ${tmp} removed`);
+  strg.removeNode(id);
+  debug(`Container ${node.name} removed`);
 }
 
 function connect2Net(netId, skip) {
@@ -318,30 +315,20 @@ function connect2Net(netId, skip) {
   return Promise.fromCallback(cb=>obj.inspect(cb))
     .then(nets=> {
         netName = nets.Name;
-        return nets.IPAM.Config.map(net=> {
-          let tmp = net.Subnet.split('/');
-          tmp = isc.calculateSubnetMask(tmp[0], tmp[1]);
-          lastIp = isc.toString(tmp.ipHigh - 1 - (commander.skipIp || 0));
-          return {
-            ipLow: tmp.ipLow,
-            ipHigh: tmp.ipHigh,
-            netId: netId,
-            name: netName,
-            ip: null
-          };
-        })
+        return strg.prepareNetworks(nets);
       }
     )
-    .tap(()=>Promise.fromCallback(cb=>obj.connect({
+    .tap((nets)=>Promise.fromCallback(cb=>obj.connect({
       Container: dockerId,
       EndpointConfig: {
         IPAMConfig: {
-          IPv4Address: lastIp
+          IPv4Address: isc.toString(nets[0].ipHigh - 1 - (commander.skipIp || 0))
         }
       }
     }, cb)))
     .then(nets=> {
-      networks.push(...nets);
+      strg.addNetwork(nets);
+
       debug(`Connected to a network ${nets[0].name}`);
     })
     .then(()=>skip ? true : refillOwnIp())
@@ -351,7 +338,7 @@ function connect2Net(netId, skip) {
     });
 }
 function disconnect2Net(netId, remove) {
-  networks = _.reject(networks, {netId: netId});
+  strg.removeNetwork(netId);
   if (!remove) {
     debug(`Disconnected from a network ${netId}`);
   }
@@ -360,8 +347,7 @@ function refillOwnIp() {
   return Promise.fromCallback(cb=>docker.getContainer(dockerId).inspect(cb))
     .then(data=> {
       _.each(data.NetworkSettings.Networks, net=> {
-        let ind = _.findIndex(networks, {netId: net.NetworkID});
-        ~ind ? networks[ind].ip = net.IPAddress : false;
+        strg.setNetworkIp(net.NetworkID,net.IPAddress);
       });
     })
 }
@@ -444,6 +430,7 @@ function dnsProxy(req, res) {
     //});
     proxy.send();
   });
+  pcache[key].catch(()=>{});
 }
 function fillReq(res, answer, req) {
   res.answer.push(...answer.answer);
@@ -494,5 +481,9 @@ setTimeout(function callMe() {
   }
 }, 6e4);
 
-process.on('SIGTERM', process.exit);
-process.on('SIGINT', process.exit);
+function showLogOnExit(){
+  console.error('Recieve signal. Exiting...');
+  process.exit()
+}
+process.on('SIGTERM', showLogOnExit);
+process.on('SIGINT', showLogOnExit);
