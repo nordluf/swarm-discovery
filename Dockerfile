@@ -4,6 +4,6 @@ EXPOSE 53/udp
 ENTRYPOINT ["node","server.js"]
 
 WORKDIR /srv/www/app
-COPY ./server.js ./package.json ./
+COPY ./server.js ./package.json ./libstorage.js ./
 
 RUN npm install && rm -rf /root/.npm
