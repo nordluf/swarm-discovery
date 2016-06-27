@@ -42,9 +42,6 @@ if (commander.args[0]) {
   dckr.init(commander)
 }
 
-if (!commander.noAutoNetworks) {
-  dckr.initAutoNetwork();
-}
 if (commander.debug) {
   debug = require('./libdebug.js')(true);
 }
@@ -289,3 +286,5 @@ function showLogOnExit() {
 }
 process.on('SIGTERM', showLogOnExit);
 process.on('SIGINT', showLogOnExit);
+const memwatch = require('memwatch-next');
+memwatch.on('leak', function (info) {console.error(info)});

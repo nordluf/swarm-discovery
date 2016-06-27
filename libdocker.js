@@ -4,7 +4,7 @@ const Promise = require('bluebird');
 const isc = require('ip-subnet-calculator');
 const strg = require('./libstorage.js');
 const fs = require('fs');
-let debug=()=>{}
+let debug=()=>{};
 
 let docker; // Docker management object
 let dockerId; // Our docker id
@@ -35,18 +35,19 @@ function init(cmd,opts) {
       props.did = Promise.fromCallback(cb=>fs.readFile('/proc/1/cpuset', {encoding: 'ascii'}, cb));
     }
     Promise.props(props)
-      .delay(1000)
-      .then(i=> {
+      .then(props=> {
         if (commander.noAutoNetworks) {
           return;
         }
-        if (!i.did || !(dockerId = /^\/docker\/([0-9a-f]+)\s*$/gm.exec(i.did))) {
+        if (!props.did || !(dockerId = /^\/docker\/([0-9a-f]+)\s*$/gm.exec(props.did))) {
           console.log('swarm-discovery started not as Docker container');
           commander.noAutoNetworks = true;
           return;
         }
         dockerId = dockerId[1];
         console.log(`Swarm-discovery docker id: ${dockerId}`)
+
+        let tmpd=null;
 
         return Promise.fromCallback(cb=>docker.getContainer(dockerId).inspect(cb))
           .catch(err=> {
@@ -55,18 +56,22 @@ function init(cmd,opts) {
             process.exit();
           })
           .then(data=> {
+            tmpd=data.NetworkSettings.Networks
             return _.map(data.NetworkSettings.Networks, net=>
-              !_.find(i.networks, {Id: net.NetworkID}) ? false :
+              !_.find(props.networks, {Id: net.NetworkID}) ? false :
                 Promise.fromCallback(cb=>docker.getNetwork(net.NetworkID).disconnect({Container: dockerId, Force: true}, cb))
             );
           })
+          .all()
           .catch(err=> {
             console.error('docker.network().disconnect error');
             console.error(err);
-            process.exit();
+            console.error(tmpd)
+            console.error(props)
+
+            // process.exit();
           })
-          .all()
-          .then(()=>Promise.all(_.map(i.networks, net=>connect2Net(net.Id, true))))
+          .then(()=>Promise.all(_.map(props.networks, net=>connect2Net(net.Id, true))))
           .catch(err=> {
             console.error('docker.network().connect error');
             console.error(err);
@@ -123,26 +128,26 @@ function init(cmd,opts) {
     addOne(message.id, message.timeNano);
     debug(`Container unpaused: ${message.id}`);
   });
-}
 
-function initAutoNetwork(){
-  emitter.on("_message", function (msg) {
-    if (!msg || msg.Type != 'network' || !msg.Actor || !msg.Actor.Attributes) {
-      return;
-    }
+  if (!commander.noAutoNetworks) {
+    emitter.on("_message", function (msg) {
+      if (!msg || msg.Type != 'network' || !msg.Actor || !msg.Actor.Attributes) {
+        return;
+      }
 
-    if (msg.Action == 'create') {
-      if (msg.Actor.Attributes.type == 'overlay') {
-        connect2Net(msg.Actor.ID);
+      if (msg.Action == 'create') {
+        if (msg.Actor.Attributes.type == 'overlay') {
+          connect2Net(msg.Actor.ID);
+        }
+      } else if (msg.Action == 'destroy') {
+        disconnect2Net(msg.Actor.ID, true);
+      } else if (msg.Action == 'disconnect') {
+        if (msg.Actor.Attributes.container == dockerId) {
+          disconnect2Net(msg.Actor.ID);
+        }
       }
-    } else if (msg.Action == 'destroy') {
-      disconnect2Net(msg.Actor.ID, true);
-    } else if (msg.Action == 'disconnect') {
-      if (msg.Actor.Attributes.container == dockerId) {
-        disconnect2Net(msg.Actor.ID);
-      }
-    }
-  });
+    });
+  }
 }
 
 function start(cb){
@@ -231,6 +236,5 @@ function removeOne(id, nt) {
 
 module.exports = {
   init,
-  initAutoNetwork,
   start
 };
