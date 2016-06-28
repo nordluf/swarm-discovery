@@ -6,6 +6,8 @@ let nodes = {}; // Nodes list
 let networks = []; // Networks list
 let ips = {}; // Ips for autonetwork feature
 
+let recievedRemoves = {};
+
 function cleanAll() {
   nodes = {};
   ips = {};
@@ -89,6 +91,20 @@ function getNetByIp(ip) {
 function getNetworks(){
   return networks;
 }
+function upRemoveMark(id){
+  if (recievedRemoves[id]){
+    return false;
+  }
+  recievedRemoves[id] = true;
+  setTimeout(()=> {
+    delete recievedRemoves[id]
+  }, 2000);
+  return true;
+}
+function getRemoveMark(id){
+  return recievedRemoves[id];
+}
+
 
 module.exports = {
   cleanAll,
@@ -102,5 +118,7 @@ module.exports = {
   addNetwork,
   removeNetwork,
   getNetByIp,
-  getNetworks
+  getNetworks,
+  upRemoveMark,
+  getRemoveMark
 };

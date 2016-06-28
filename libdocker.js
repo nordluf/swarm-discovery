@@ -4,7 +4,7 @@ const Promise = require('bluebird');
 const isc = require('ip-subnet-calculator');
 const strg = require('./libstorage.js');
 const fs = require('fs');
-let debug=()=>{};
+let debug = ()=> {};
 
 let docker; // Docker management object
 let dockerId; // Our docker id
@@ -13,21 +13,25 @@ let emitter;
 let commander;
 let startupCallback;
 
-function init(cmd,opts) {
-  commander=cmd;
+function init(cmd, opts) {
+  commander = cmd;
   if (commander.debug) {
     debug = require('./libdebug.js')(true);
   }
 
   docker = new require('dockerode')(opts);
-  emitter= new (require('docker-events'))({docker}); // Docker events listener
+  emitter = new (require('docker-events'))({docker}); // Docker events listener
 
   emitter.on("connect", function () {
     debug("Connected to docker api.");
     let props = {
       containers: Promise.fromCallback(cb=>docker.listContainers({}, cb))
         .then(data=>data.map(i=>addOne(i.Id).reflect()))
-        .all()
+        .all(),
+      restart: Promise.fromCallback(cb=>fs.stat('/serviceStarted', cb))
+        .then(()=>debug('Start server after restart. Waiting for two seconds')).delay(2000)
+        .catch((err)=> {
+        })
     };
     if (!commander.noAutoNetworks) {
       props.networks = Promise.fromCallback(cb=>docker.listNetworks({}, cb))
@@ -47,7 +51,7 @@ function init(cmd,opts) {
         dockerId = dockerId[1];
         console.log(`Swarm-discovery docker id: ${dockerId}`)
 
-        let tmpd=null;
+        let tmpd = null;
 
         return Promise.fromCallback(cb=>docker.getContainer(dockerId).inspect(cb))
           .catch(err=> {
@@ -56,7 +60,7 @@ function init(cmd,opts) {
             process.exit();
           })
           .then(data=> {
-            tmpd=data.NetworkSettings.Networks
+            tmpd = data.NetworkSettings.Networks
             return _.map(data.NetworkSettings.Networks, net=>
               !_.find(props.networks, {Id: net.NetworkID}) ? false :
                 Promise.fromCallback(cb=>docker.getNetwork(net.NetworkID).disconnect({Container: dockerId, Force: true}, cb))
@@ -92,7 +96,7 @@ function init(cmd,opts) {
         }
 
         server_done = server_done || startupCallback && startupCallback() || true;
-        console.log("Server is starting...");
+        fs.writeFile('/serviceStarted', 1, ()=>console.log("Server is starting..."));
       })
       .catch(err=> {
         console.error('Common startup error');
@@ -150,8 +154,8 @@ function init(cmd,opts) {
   }
 }
 
-function start(cb){
-  startupCallback=cb;
+function start(cb) {
+  startupCallback = cb;
   emitter.start();
 }
 
@@ -199,10 +203,15 @@ function refillOwnIp() {
     })
 }
 function addOne(id, nt) {
-  return Promise.fromCallback(cb=>docker.getContainer(id).inspect({}, cb))
+  return Promise.resolve().delay(1000).then(()=>strg.getRemoveMark(id) || Promise.fromCallback(cb=>docker.getContainer(id).inspect({}, cb)))
     .then(data=> {
+      if (typeof data != 'object') {
+        debug(`Container ${id} exited right after start`);
+        return;
+      }
       if (!data || !data.State || !data.State.Running) {
         console.error(`Container ${id} not running`);
+        strg.upRemoveMark(id);
         return;
       }
       if (data.State.Paused) {
@@ -214,14 +223,23 @@ function addOne(id, nt) {
       debug(`Container ${node.name} added`);
     })
     .catch(err=> {
+      if (err.statusCode == 404) {
+        strg.upRemoveMark(id);
+        debug(`Error 404: '${err.reason}' for container ${id}. Exited right after start?`);
+        return;
+      }
       console.error(`Error ${err.statusCode}: '${err.reason}' for container ${id}`);
       console.error(err);
     });
 }
 function removeOne(id, nt) {
+  if (!strg.upRemoveMark(id)) {
+    return;
+  }
+
   let node = strg.getNode(id);
   if (!node) {
-    console.error(`Container ${id} not exists.`);
+    debug(`Container ${id} not exists.`);
     return;
   }
   if (node.added >= nt) {
