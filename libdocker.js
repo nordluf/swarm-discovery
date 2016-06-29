@@ -4,7 +4,7 @@ const Promise = require('bluebird');
 const isc = require('ip-subnet-calculator');
 const strg = require('./libstorage.js');
 const fs = require('fs');
-let debug = ()=> {};
+let debug = ()=> 1;
 
 let docker; // Docker management object
 let dockerId; // Our docker id
@@ -26,12 +26,7 @@ function init(cmd, opts) {
     debug("Connected to docker api.");
     let props = {
       containers: Promise.fromCallback(cb=>docker.listContainers({}, cb))
-        .then(data=>data.map(i=>addOne(i.Id).reflect()))
-        .all(),
-      restart: Promise.fromCallback(cb=>fs.stat('/serviceStarted', cb))
-        .then(()=>debug('Start server after restart. Waiting for two seconds')).delay(2000)
-        .catch((err)=> {
-        })
+        .then(data=>data.map(i=>addOne(i.Id).reflect())).all()
     };
     if (!commander.noAutoNetworks) {
       props.networks = Promise.fromCallback(cb=>docker.listNetworks({}, cb))
@@ -51,28 +46,19 @@ function init(cmd, opts) {
         dockerId = dockerId[1];
         console.log(`Swarm-discovery docker id: ${dockerId}`)
 
-        let tmpd = null;
-
         return Promise.fromCallback(cb=>docker.getContainer(dockerId).inspect(cb))
           .catch(err=> {
             console.error('docker.getContainer error');
             console.error(err);
             process.exit();
           })
-          .then(data=> {
-            tmpd = data.NetworkSettings.Networks
-            return _.map(data.NetworkSettings.Networks, net=>
-              !_.find(props.networks, {Id: net.NetworkID}) ? false :
-                Promise.fromCallback(cb=>docker.getNetwork(net.NetworkID).disconnect({Container: dockerId, Force: true}, cb))
-            );
-          })
+          .then(data=> _.map(data.NetworkSettings.Networks, (net,netName)=>
+              !_.find(props.networks, {Id: net.NetworkID}) ? false : waitDisconnect(net.NetworkID,netName)
+          ))
           .all()
           .catch(err=> {
             console.error('docker.network().disconnect error');
             console.error(err);
-            console.error(tmpd)
-            console.error(props)
-
             // process.exit();
           })
           .then(()=>Promise.all(_.map(props.networks, net=>connect2Net(net.Id, true))))
@@ -96,7 +82,7 @@ function init(cmd, opts) {
         }
 
         server_done = server_done || startupCallback && startupCallback() || true;
-        fs.writeFile('/serviceStarted', 1, ()=>console.log("Server is starting..."));
+        console.log("Server is starting...");
       })
       .catch(err=> {
         console.error('Common startup error');
@@ -107,6 +93,7 @@ function init(cmd, opts) {
   });
   emitter.on("disconnect", function () {
     console.error("Disconnected from docker api. Reconnecting.");
+    process.exit()
   });
 
   emitter.on('error', function (err) {
@@ -194,6 +181,38 @@ function disconnect2Net(netId, remove) {
     debug(`Disconnected from a network ${netId}`);
   }
 }
+function waitDisconnect(nid,name) {
+  return Promise.resolve()
+    // .then(()=>console.log('remove!')).delay(10000).then(()=>console.log('removed'))
+    .then(function callMe(){
+      return Promise.fromCallback(cb=>docker.getNetwork(nid).inspect(cb))
+        .then(net=>{
+          if (net.Containers[dockerId]){
+            return Promise.fromCallback(cb=>docker.getNetwork(nid).disconnect({Container: net.Containers[dockerId].EndpointID, Force: true}, cb))
+              // .catch(err=>{
+              //   Promise.fromCallback(cb=>docker.getNetwork(nid).inspect(cb)).then(net=>{
+              //     console.error('Error while triyng to remove network.');
+              //     console.error(err)
+              //     console.error(net);
+              //     return Promise.resolve().delay(1000).then(callMe);
+              //   })
+              // })
+          }
+          console.error(`Swarm-discovery actually not connected to network ${name} [${nid}]. Waiting for a second...`);
+          return Promise.resolve().delay(1000).then(callMe);
+        })
+    }).then(function callMe(){
+      return Promise.fromCallback(cb=>docker.getNetwork(nid).inspect(cb))
+        .then(net=>{
+          if (!net.Containers[dockerId]){
+            return true;
+          }
+          console.error(`Swarm-discovery still connected to network ${name} [${nid}]. Waiting for 5 seconds...`);
+          return Promise.resolve().delay(5000).then(callMe);
+        })
+    })
+}
+
 function refillOwnIp() {
   return Promise.fromCallback(cb=>docker.getContainer(dockerId).inspect(cb))
     .then(data=> {

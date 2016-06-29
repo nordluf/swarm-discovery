@@ -5,8 +5,7 @@ const Promise = require('bluebird');
 const ndns = require('native-dns'); // Native DNS object
 const strg = require('./libstorage.js');
 const dckr = require('./libdocker.js');
-let debug = ()=> {
-};
+let debug = ()=> 1;
 
 // :TODO add settings based on env vars and arguments
 commander

@@ -92,6 +92,7 @@ function getNetworks(){
   return networks;
 }
 function upRemoveMark(id){
+  return true;
   if (recievedRemoves[id]){
     return false;
   }
@@ -102,6 +103,7 @@ function upRemoveMark(id){
   return true;
 }
 function getRemoveMark(id){
+  return false;
   return recievedRemoves[id];
 }
 
