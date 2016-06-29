@@ -52,8 +52,8 @@ function init(cmd, opts) {
             console.error(err);
             process.exit();
           })
-          .then(data=> _.map(data.NetworkSettings.Networks, (net,netName)=>
-              !_.find(props.networks, {Id: net.NetworkID}) ? false : waitDisconnect(net.NetworkID,netName)
+          .then(data=> _.map(data.NetworkSettings.Networks, (net, netName)=>
+            !_.find(props.networks, {Id: net.NetworkID}) ? false : waitDisconnect(net.NetworkID, netName)
           ))
           .all()
           .catch(err=> {
@@ -122,6 +122,9 @@ function init(cmd, opts) {
 
   if (!commander.noAutoNetworks) {
     emitter.on("_message", function (msg) {
+      if (!server_done) {
+        return;
+      }
       if (!msg || msg.Type != 'network' || !msg.Actor || !msg.Actor.Attributes) {
         return;
       }
@@ -181,34 +184,38 @@ function disconnect2Net(netId, remove) {
     debug(`Disconnected from a network ${netId}`);
   }
 }
-function waitDisconnect(nid,name) {
+function waitDisconnect(nid, name) {
+  function discon() {
+    return Promise.fromCallback(cb=>docker.getNetwork(nid).disconnect({Container: net.Containers[dockerId].Name, Force: true}, cb));
+  }
+
   return Promise.resolve()
-    // .then(()=>console.log('remove!')).delay(10000).then(()=>console.log('removed'))
-    .then(function callMe(){
+  // .then(()=>console.log('remove!')).delay(10000).then(()=>console.log('removed'))
+    .then(function callMe() {
       return Promise.fromCallback(cb=>docker.getNetwork(nid).inspect(cb))
-        .then(net=>{
-          if (net.Containers[dockerId]){
-            return Promise.fromCallback(cb=>docker.getNetwork(nid).disconnect({Container: net.Containers[dockerId].EndpointID, Force: true}, cb))
-              // .catch(err=>{
-              //   Promise.fromCallback(cb=>docker.getNetwork(nid).inspect(cb)).then(net=>{
-              //     console.error('Error while triyng to remove network.');
-              //     console.error(err)
-              //     console.error(net);
-              //     return Promise.resolve().delay(1000).then(callMe);
-              //   })
-              // })
+        .then(net=> {
+          if (net.Containers[dockerId]) {
+            return discon();
+            // .catch(err=>{
+            //   Promise.fromCallback(cb=>docker.getNetwork(nid).inspect(cb)).then(net=>{
+            //     console.error('Error while triyng to remove network.');
+            //     console.error(err)
+            //     console.error(net);
+            //     return Promise.resolve().delay(1000).then(callMe);
+            //   })
+            // })
           }
           console.error(`Swarm-discovery actually not connected to network ${name} [${nid}]. Waiting for a second...`);
           return Promise.resolve().delay(1000).then(callMe);
         })
-    }).then(function callMe(){
+    }).then(function callMe() {
       return Promise.fromCallback(cb=>docker.getNetwork(nid).inspect(cb))
-        .then(net=>{
-          if (!net.Containers[dockerId]){
+        .then(net=> {
+          if (!net.Containers[dockerId]) {
             return true;
           }
           console.error(`Swarm-discovery still connected to network ${name} [${nid}]. Waiting for 5 seconds...`);
-          return Promise.resolve().delay(5000).then(callMe);
+          return Promise.resolve().delay(5000).then(discon).then(callMe);
         })
     })
 }
