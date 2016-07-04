@@ -91,20 +91,28 @@ function getNetByIp(ip) {
 function getNetworks(){
   return networks;
 }
-function upRemoveMark(id){
-  return true;
-  if (recievedRemoves[id]){
+
+// Returns true if there are no newer "remove event"
+function upRemoveMark(id,nt){
+  if (recievedRemoves[id]&&recievedRemoves[id]>nt){
+    console.info(`There is newer remove event in upRmove for ${id}`)
+  }
+
+  if (recievedRemoves[id]&&recievedRemoves[id]>nt){
     return false;
   }
-  recievedRemoves[id] = true;
+  recievedRemoves[id] = nt;
   setTimeout(()=> {
     delete recievedRemoves[id]
   }, 2000);
   return true;
 }
-function getRemoveMark(id){
-  return false;
-  return recievedRemoves[id];
+// return true if there is newer "remove event"
+function getRemoveMark(id,nt){
+  if (recievedRemoves[id]&&recievedRemoves[id]>nt){
+    console.info(`There is newer remove event in getRmove for ${id}`)
+  }
+  return recievedRemoves[id]&&recievedRemoves[id]>nt;
 }
 
 

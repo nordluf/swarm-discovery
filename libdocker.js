@@ -185,9 +185,9 @@ function disconnect2Net(netId, remove) {
   }
 }
 function waitDisconnect(nid, name) {
-  function discon() {
-    return Promise.fromCallback(cb=>docker.getNetwork(nid).disconnect({Container: net.Containers[dockerId].Name, Force: true}, cb));
-  }
+  // function discon() {
+  //   return Promise.fromCallback(cb=>docker.getNetwork(nid).disconnect({Container: net.Containers[dockerId].Name, Force: true}, cb));
+  // }
 
   return Promise.resolve()
   // .then(()=>console.log('remove!')).delay(10000).then(()=>console.log('removed'))
@@ -195,7 +195,8 @@ function waitDisconnect(nid, name) {
       return Promise.fromCallback(cb=>docker.getNetwork(nid).inspect(cb))
         .then(net=> {
           if (net.Containers[dockerId]) {
-            return discon();
+            return Promise.fromCallback(cb=>docker.getNetwork(nid).disconnect({Container: net.Containers[dockerId].Name, Force: true}, cb));
+            // return discon();
             // .catch(err=>{
             //   Promise.fromCallback(cb=>docker.getNetwork(nid).inspect(cb)).then(net=>{
             //     console.error('Error while triyng to remove network.');
@@ -229,15 +230,15 @@ function refillOwnIp() {
     })
 }
 function addOne(id, nt) {
-  return Promise.resolve().delay(1000).then(()=>strg.getRemoveMark(id) || Promise.fromCallback(cb=>docker.getContainer(id).inspect({}, cb)))
+  return Promise.resolve().then(()=>/*strg.getRemoveMark(id,nt) || */Promise.fromCallback(cb=>docker.getContainer(id).inspect({}, cb)))
     .then(data=> {
-      if (typeof data != 'object') {
-        debug(`Container ${id} exited right after start`);
-        return;
-      }
+      // if (typeof data != 'object') {
+      //   debug(`Container ${id} exited right after start`);
+      //   return;
+      // }
       if (!data || !data.State || !data.State.Running) {
         console.error(`Container ${id} not running`);
-        strg.upRemoveMark(id);
+        // strg.upRemoveMark(id,nt);
         return;
       }
       if (data.State.Paused) {
@@ -250,7 +251,7 @@ function addOne(id, nt) {
     })
     .catch(err=> {
       if (err.statusCode == 404) {
-        strg.upRemoveMark(id);
+        strg.upRemoveMark(id,nt);
         debug(`Error 404: '${err.reason}' for container ${id}. Exited right after start?`);
         return;
       }
@@ -259,22 +260,24 @@ function addOne(id, nt) {
     });
 }
 function removeOne(id, nt) {
-  if (!strg.upRemoveMark(id)) {
-    return;
-  }
+  Promise.resolve().then(()=>{
+    // if (!strg.upRemoveMark(id,nt)) {
+    //   return;
+    // }
 
-  let node = strg.getNode(id);
-  if (!node) {
-    debug(`Container ${id} not exists.`);
-    return;
-  }
-  if (node.added >= nt) {
-    console.error(`Some action with ${id} already happened.`);
-    return;
-  }
+    let node = strg.getNode(id);
+    if (!node) {
+      console.error(`Container ${id} not exists. Nothing to remove.`);
+      return;
+    }
+    if (node.added >= nt) {
+      console.error(`Some action with ${id} already happened.`);
+      return;
+    }
 
-  strg.removeNode(id);
-  debug(`Container ${node.name} removed`);
+    // strg.removeNode(id);
+    debug(`Container ${node.name} removed`);
+  });
 }
 
 
