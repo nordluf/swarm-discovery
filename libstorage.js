@@ -97,19 +97,13 @@ function getNetworks() {
 // Returns true if there are no newer "remove event"
 function upRemoveMark(id, nt) {
   if (recievedRemoves[id] && recievedRemoves[id] > nt) {
-    console.info(`There is newer remove event in upRemove for ${id}`)
-  }
-
-  if (recievedRemoves[id] && recievedRemoves[id] > nt) {
     return false;
   }
   recievedRemoves[id] = nt;
   if (recievedRemoves_timers[id]) {
     clearTimeout(recievedRemoves_timers[id]);
-    console.info('cleam timer for recievedRemoves_timers[id]');
   }
   recievedRemoves_timers[id] = setTimeout(()=> {
-    console.info(`execute timer for recievedRemoves [${id}]`);
     delete recievedRemoves[id];
     delete recievedRemoves_timers[id];
   }, 2000);
@@ -117,16 +111,26 @@ function upRemoveMark(id, nt) {
 }
 // return true if there is newer "remove event"
 function getRemoveMark(id, nt) {
-  if (recievedRemoves[id] && recievedRemoves[id] > nt) {
-    console.info(`There is newer remove event in getRemove for ${id}`)
-  }
   return recievedRemoves[id] && recievedRemoves[id] > nt;
 }
 
 function debugDump() {
-  console.log(nodes);
-  console.log(networks);
-  console.log(ips)
+  console.info('-============== Nodes:')
+  for (let i in nodes){
+    console.info(`Key: ${i}`);
+    console.info(nodes[i]);
+  }
+
+  console.info('-============== Networks:')
+  for (let i in networks){
+    console.info(networks[i]);
+  }
+
+  console.info('-============== IPs:')
+  for (let i in ips){
+    console.info(`Key: ${i}`);
+    console.info(ips[i]);
+  }
 }
 
 module.exports = {

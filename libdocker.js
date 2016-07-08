@@ -229,7 +229,7 @@ function addOne(id, nt) {
         return;
       }
       if (!data || !data.State || !data.State.Running) {
-        console.error(`Container ${id} not running`);
+        debug(`Container ${id} not running`);
         strg.upRemoveMark(id, nt);
         return;
       }
@@ -239,7 +239,7 @@ function addOne(id, nt) {
       }
       let node = strg.addNode(data, nt);
 
-      process.nextTick(()=>debug(`Container ${node.name}[${id}] added with IPs ${JSON.stringify(node.ips)}`));
+      process.nextTick(()=>debug(`Container ${node.name}[${id}] added with IPs `+JSON.stringify(node.ips)));
     })
     .catch(err=> {
       if (err.statusCode == 404) {
@@ -253,13 +253,12 @@ function addOne(id, nt) {
 }
 function removeOne(id, nt) {
   if (!strg.upRemoveMark(id, nt)) {
-    console.info('removal up?')
     return;
   }
 
   let node = strg.getNode(id);
   if (!node) {
-    console.error(`Container ${id} not exists. Nothing to remove.`);
+    debug(`Container ${id} not exists. Nothing to remove.`);
     return;
   }
   if (node.added >= nt) {
