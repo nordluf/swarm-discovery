@@ -141,6 +141,7 @@ function ownIps(req, res) {
       ttl: 0
     })));
   }
+  process.nextTick(strg.debugDump);
   return checkTime(res);
 }
 

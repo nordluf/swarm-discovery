@@ -7,6 +7,8 @@ let networks = []; // Networks list
 let ips = {}; // Ips for autonetwork feature
 
 let recievedRemoves = {};
+let recievedRemoves_timers = {};
+
 
 function cleanAll() {
   nodes = {};
@@ -29,7 +31,7 @@ function getNode(id) {
   return nodes[id];
 }
 
-function addNode(data,time) {
+function addNode(data, time) {
   let ip = null;
   nodes[data.Id] = {
     name: data.Name.slice(1).toLowerCase(),
@@ -88,33 +90,44 @@ function getNetByIp(ip) {
   ip = isc.toDecimal(ip);
   return _.find(networks, net=>net.ipLow < ip && ip < net.ipHigh);
 }
-function getNetworks(){
+function getNetworks() {
   return networks;
 }
 
 // Returns true if there are no newer "remove event"
-function upRemoveMark(id,nt){
-  if (recievedRemoves[id]&&recievedRemoves[id]>nt){
-    console.info(`There is newer remove event in upRmove for ${id}`)
+function upRemoveMark(id, nt) {
+  if (recievedRemoves[id] && recievedRemoves[id] > nt) {
+    console.info(`There is newer remove event in upRemove for ${id}`)
   }
 
-  if (recievedRemoves[id]&&recievedRemoves[id]>nt){
+  if (recievedRemoves[id] && recievedRemoves[id] > nt) {
     return false;
   }
   recievedRemoves[id] = nt;
-  setTimeout(()=> {
-    delete recievedRemoves[id]
+  if (recievedRemoves_timers[id]) {
+    clearTimeout(recievedRemoves_timers[id]);
+    console.info('cleam timer for recievedRemoves_timers[id]');
+  }
+  recievedRemoves_timers[id] = setTimeout(()=> {
+    console.info(`execute timer for recievedRemoves [${id}]`);
+    delete recievedRemoves[id];
+    delete recievedRemoves_timers[id];
   }, 2000);
   return true;
 }
 // return true if there is newer "remove event"
-function getRemoveMark(id,nt){
-  if (recievedRemoves[id]&&recievedRemoves[id]>nt){
-    console.info(`There is newer remove event in getRmove for ${id}`)
+function getRemoveMark(id, nt) {
+  if (recievedRemoves[id] && recievedRemoves[id] > nt) {
+    console.info(`There is newer remove event in getRemove for ${id}`)
   }
-  return recievedRemoves[id]&&recievedRemoves[id]>nt;
+  return recievedRemoves[id] && recievedRemoves[id] > nt;
 }
 
+function debugDump() {
+  console.log(nodes);
+  console.log(networks);
+  console.log(ips)
+}
 
 module.exports = {
   cleanAll,
@@ -130,5 +143,6 @@ module.exports = {
   getNetByIp,
   getNetworks,
   upRemoveMark,
-  getRemoveMark
+  getRemoveMark,
+  debugDump
 };

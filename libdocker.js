@@ -184,39 +184,31 @@ function disconnect2Net(netId, remove) {
     debug(`Disconnected from a network ${netId}`);
   }
 }
+
+
 function waitDisconnect(nid, name) {
-  // function discon() {
-  //   return Promise.fromCallback(cb=>docker.getNetwork(nid).disconnect({Container: net.Containers[dockerId].Name, Force: true}, cb));
-  // }
+  let nobj = docker.getNetwork(nid);
 
   return Promise.resolve()
-  // .then(()=>console.log('remove!')).delay(10000).then(()=>console.log('removed'))
     .then(function callMe() {
-      return Promise.fromCallback(cb=>docker.getNetwork(nid).inspect(cb))
+      return Promise.fromCallback(cb=>nobj.inspect(cb))
         .then(net=> {
           if (net.Containers[dockerId]) {
-            return Promise.fromCallback(cb=>docker.getNetwork(nid).disconnect({Container: net.Containers[dockerId].Name, Force: true}, cb));
-            // return discon();
-            // .catch(err=>{
-            //   Promise.fromCallback(cb=>docker.getNetwork(nid).inspect(cb)).then(net=>{
-            //     console.error('Error while triyng to remove network.');
-            //     console.error(err)
-            //     console.error(net);
-            //     return Promise.resolve().delay(1000).then(callMe);
-            //   })
-            // })
+            return Promise.fromCallback(cb=>nobj.disconnect({Container: net.Containers[dockerId].Name, Force: true}, cb));
           }
           console.error(`Swarm-discovery actually not connected to network ${name} [${nid}]. Waiting for a second...`);
           return Promise.resolve().delay(1000).then(callMe);
         })
     }).then(function callMe() {
-      return Promise.fromCallback(cb=>docker.getNetwork(nid).inspect(cb))
+      return Promise.fromCallback(cb=>nobj.inspect(cb))
         .then(net=> {
           if (!net.Containers[dockerId]) {
             return true;
           }
           console.error(`Swarm-discovery still connected to network ${name} [${nid}]. Waiting for 5 seconds...`);
-          return Promise.resolve().delay(5000).then(discon).then(callMe);
+          return Promise.resolve().delay(5000).then(()=>
+            Promise.fromCallback(cb=>nobj.disconnect({Container: net.Containers[dockerId].Name, Force: true}, cb))
+          ).then(callMe);
         })
     })
 }
@@ -230,15 +222,15 @@ function refillOwnIp() {
     })
 }
 function addOne(id, nt) {
-  return Promise.resolve().then(()=>/*strg.getRemoveMark(id,nt) || */Promise.fromCallback(cb=>docker.getContainer(id).inspect({}, cb)))
+  return Promise.resolve().then(()=>strg.getRemoveMark(id, nt) || Promise.fromCallback(cb=>docker.getContainer(id).inspect({}, cb)))
     .then(data=> {
-      // if (typeof data != 'object') {
-      //   debug(`Container ${id} exited right after start`);
-      //   return;
-      // }
+      if (typeof data != 'object') {
+        debug(`Container ${id} exited right after start`);
+        return;
+      }
       if (!data || !data.State || !data.State.Running) {
         console.error(`Container ${id} not running`);
-        // strg.upRemoveMark(id,nt);
+        strg.upRemoveMark(id, nt);
         return;
       }
       if (data.State.Paused) {
@@ -247,11 +239,11 @@ function addOne(id, nt) {
       }
       let node = strg.addNode(data, nt);
 
-      debug(`Container ${node.name} added`);
+      process.nextTick(()=>debug(`Container ${node.name}[${id}] added with IPs ${JSON.stringify(node.ips)}`));
     })
     .catch(err=> {
       if (err.statusCode == 404) {
-        strg.upRemoveMark(id,nt);
+        strg.upRemoveMark(id, nt);
         debug(`Error 404: '${err.reason}' for container ${id}. Exited right after start?`);
         return;
       }
@@ -260,24 +252,23 @@ function addOne(id, nt) {
     });
 }
 function removeOne(id, nt) {
-  Promise.resolve().then(()=>{
-    // if (!strg.upRemoveMark(id,nt)) {
-    //   return;
-    // }
+  if (!strg.upRemoveMark(id, nt)) {
+    console.info('removal up?')
+    return;
+  }
 
-    let node = strg.getNode(id);
-    if (!node) {
-      console.error(`Container ${id} not exists. Nothing to remove.`);
-      return;
-    }
-    if (node.added >= nt) {
-      console.error(`Some action with ${id} already happened.`);
-      return;
-    }
+  let node = strg.getNode(id);
+  if (!node) {
+    console.error(`Container ${id} not exists. Nothing to remove.`);
+    return;
+  }
+  if (node.added >= nt) {
+    console.error(`Some action with ${node.name}[${id}] already happened.`);
+    return;
+  }
 
-    // strg.removeNode(id);
-    debug(`Container ${node.name} removed`);
-  });
+  strg.removeNode(id);
+  debug(`Container ${node.name}[${id}] removed`);
 }
 
 
