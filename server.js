@@ -286,5 +286,8 @@ function showLogOnExit() {
 }
 process.on('SIGTERM', showLogOnExit);
 process.on('SIGINT', showLogOnExit);
-const memwatch = require('memwatch-next');
-memwatch.on('leak', function (info) {console.error(info)});
+
+
+// const memwatch = require('memwatch-next');
+// memwatch.on('leak', function (info) {console.error(info)});
+// "memwatch-next": "^0.3.0",

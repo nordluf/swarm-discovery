@@ -170,7 +170,7 @@ function connect2Net(netId, skip) {
     .then(nets=> {
       strg.addNetwork(nets);
 
-      debug(`Connected to a network ${nets[0].name}`);
+      console.log(`Connected to a network ${netName} [${netId}]`);
     })
     .then(()=>skip ? true : refillOwnIp())
     .catch(err=> {
@@ -180,9 +180,7 @@ function connect2Net(netId, skip) {
 }
 function disconnect2Net(netId, remove) {
   strg.removeNetwork(netId);
-  if (!remove) {
-    debug(`Disconnected from a network ${netId}`);
-  }
+  console.log(`Disconnected from ${remove?'destroyed':'a'} network [${netId}]`);
 }
 
 
