@@ -44,7 +44,7 @@ function init(cmd, opts) {
           return;
         }
         dockerId = dockerId[1];
-        console.log(`Swarm-discovery docker id: ${dockerId}`)
+        console.log(`Swarm-discovery docker id: ${dockerId}`);
 
         return Promise.fromCallback(cb=>docker.getContainer(dockerId).inspect(cb))
           .catch(err=> {
@@ -52,16 +52,20 @@ function init(cmd, opts) {
             console.error(err);
             process.exit();
           })
-          .then(data=> _.map(data.NetworkSettings.Networks, (net, netName)=>
-            !_.find(props.networks, {Id: net.NetworkID}) ? false : waitDisconnect(net.NetworkID, netName)
-          ))
-          .all()
+          .then(data=>
+              _.map(data.NetworkSettings.Networks,(net, netName)=>
+                !_.find(props.networks, {Id: net.NetworkID}) ? false : [net.NetworkID, netName]
+              ).filter(i=>i)
+          )
+          .mapSeries(net=>waitDisconnect(net[0], net[1]))
           .catch(err=> {
             console.error('docker.network().disconnect error');
             console.error(err);
-            // process.exit();
+            process.exit();
           })
-          .then(()=>Promise.all(_.map(props.networks, net=>connect2Net(net.Id, true))))
+          .return(props.networks)
+          .mapSeries(net=>connect2Net(net.Id, true))
+          // .then(()=>Promise.all(_.map(props.networks, net=>connect2Net(net.Id, true))))
           .catch(err=> {
             console.error('docker.network().connect error');
             console.error(err);
@@ -176,6 +180,7 @@ function connect2Net(netId, skip) {
     .catch(err=> {
       console.error(`Auto network recognition and in-network DNS for network ${netName} [${netId}] disabled:`);
       console.error(err);
+      process.exit();
     });
 }
 function disconnect2Net(netId, remove) {
@@ -201,12 +206,28 @@ function waitDisconnect(nid, name) {
       return Promise.fromCallback(cb=>nobj.inspect(cb))
         .then(net=> {
           if (!net.Containers[dockerId]) {
+            console.log(`Initially disconnected from a network ${name} [${nid}]`);
             return true;
           }
           console.error(`Swarm-discovery still connected to network ${name} [${nid}]. Waiting for 5 seconds...`);
           return Promise.resolve().delay(5000).then(()=>
             Promise.fromCallback(cb=>nobj.disconnect({Container: net.Containers[dockerId].Name, Force: true}, cb))
           ).then(callMe);
+        })
+    })
+    .then(()=>setTimeout(()=>{
+      console.error(`Swarm-discovery actually still connected to network ${name} [${nid}] after 60 seconds. Reatarting...`);
+      process.exit();
+    },6e5))
+    .then(function callMe(tmt) {
+      return Promise.fromCallback(cb=>nobj.inspect(cb))
+        .then(net=> {
+          if (!net.Containers[dockerId]) {
+            clearTimeout(tmt);
+            return true;
+          }
+          console.error(`Swarm-discovery actually still connected to network ${name} [${nid}]. Waiting for 5 seconds...`);
+          return Promise.resolve().delay(5000).then(()=>callMe(tmt));
         })
     })
 }
