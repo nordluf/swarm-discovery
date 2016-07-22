@@ -53,9 +53,9 @@ function init(cmd, opts) {
             process.exit();
           })
           .then(data=>
-              _.map(data.NetworkSettings.Networks,(net, netName)=>
-                !_.find(props.networks, {Id: net.NetworkID}) ? false : [net.NetworkID, netName]
-              ).filter(i=>i)
+            _.map(data.NetworkSettings.Networks, (net, netName)=>
+              !_.find(props.networks, {Id: net.NetworkID}) ? false : [net.NetworkID, netName]
+            ).filter(i=>i)
           )
           .mapSeries(net=>waitDisconnect(net[0], net[1]))
           .catch(err=> {
@@ -185,59 +185,61 @@ function connect2Net(netId, skip) {
 }
 function disconnect2Net(netId, remove) {
   strg.removeNetwork(netId);
-  console.log(`Disconnected from ${remove?'destroyed':'a'} network [${netId}]`);
+  console.log(`Disconnected from ${remove ? 'destroyed' : 'a'} network [${netId}]`);
 }
-
 
 function waitDisconnect(nid, name) {
   let nobj = docker.getNetwork(nid);
-  let initTmt=Date.now();
+  let initTmt = Date.now();
+
+  function localDisconnect(net, msg404) {
+    return Promise.fromCallback(cb=>nobj.disconnect({Container: net.Containers[dockerId].Name, Force: true}, cb))
+      .catch(err=> {
+        if (err.statusCode == 404) {
+          console.error(msg404);
+        } else {
+          throw err;
+        }
+      })
+  }
 
   return Promise.resolve()
     .then(function callMe() {
       return Promise.fromCallback(cb=>nobj.inspect(cb))
         .then(net=> {
           if (net.Containers[dockerId]) {
-            return Promise.fromCallback(cb=>nobj.disconnect({Container: net.Containers[dockerId].Name, Force: true}, cb));
-          } else if (Date.now()-initTmt>1e4){
-            console.error(`Swarm-discovery still not connected to network ${name} [${nid}]. Let's pray it could be resolved later, what else can I do?`);
+            let initTmt = Date.now();
+            return localDisconnect(net, `Data for the network ${name} [${nid}] is inconsistent. Well, let's continue anyway.`);
+          } else if (Date.now() - initTmt > 1e4) {
+            let initTmt = Date.now();
+            console.error(`Swarm-discovery still not connected to the network ${name} [${nid}]. Let's pray that it could be resolved later, what else can we do?`);
             return true;
-            // return Promise.fromCallback(cb=>nobj.disconnect({Container: dockerId, Force: true}, cb))
-            //   .catch(err=>{
-            //     if (err.statusCode==404){
-            //       console.error(`Data for network ${name} [${nid}] is inconsistent. Let's try to connect, what else can I do?`);
-            //     } else {
-            //       throw err;
-            //     }
-            //   });
           }
-          console.error(`Swarm-discovery actually not connected to network ${name} [${nid}]. Waiting for a second...`);
+          console.error(`Swarm-discovery actually not connected to the network ${name} [${nid}]. Waiting for a second...`);
           return Promise.resolve().delay(1000).then(callMe);
         })
     }).then(function callMe() {
       return Promise.fromCallback(cb=>nobj.inspect(cb))
         .then(net=> {
           if (!net.Containers[dockerId]) {
-            console.log(`Initially disconnected from a network ${name} [${nid}]`);
+            let initTmt = Date.now();
+            console.log(`Initially disconnected from the network ${name} [${nid}]`);
+            return true;
+          } else if (Date.now() - initTmt > 1e4) {
+            let initTmt = Date.now();
+            console.error(`Data for the network ${name} [${nid}] is inconsistent. Probably we have been disconnected.`);
             return true;
           }
-          console.error(`Swarm-discovery still connected to network ${name} [${nid}]. Trying to disconnect and check a second later... `);
-          return Promise.resolve().then(()=>
-            Promise.fromCallback(cb=>nobj.disconnect({Container: net.Containers[dockerId].Name, Force: true}, cb))
-              .catch(err=>{
-                if (err.statusCode==404){
-                  console.error(`Data for network ${name} [${nid}] is inconsistent. Let's pray it could be resolved later...`);
-                } else {
-                  throw err;
-                }
-              })
-          ).delay(1000).then(callMe);
+          console.error(`Swarm-discovery still connected to the network ${name} [${nid}]. Trying to disconnect and check a second later... `);
+          return Promise.resolve()
+            .then(()=>localDisconnect(net, `Data for the network ${name} [${nid}] is inconsistent. But - still waiting...`))
+            .delay(1000).then(callMe);
         })
     })
-    .then(()=>setTimeout(()=>{
+    .then(()=>setTimeout(()=> {
       console.error(`Swarm-discovery actually still connected to network ${name} [${nid}] after 10 seconds. Restarting...`);
       process.exit();
-    },1e4))
+    }, 1e4))
     .then(function callMe(tmt) {
       return Promise.fromCallback(cb=>nobj.inspect(cb))
         .then(net=> {
@@ -277,7 +279,7 @@ function addOne(id, nt) {
       }
       let node = strg.addNode(data, nt);
 
-      process.nextTick(()=>debug(`Container ${node.name}[${id}] added with IPs `+JSON.stringify(node.ips)));
+      process.nextTick(()=>debug(`Container ${node.name}[${id}] added with IPs ` + JSON.stringify(node.ips)));
     })
     .catch(err=> {
       if (err.statusCode == 404) {
